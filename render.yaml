@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: ai-agent-api
+    env: python
+    region: frankfurt
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: PAY_TO_ADDRESS_EVM
+        sync: false
+      - key: ENVIRONMENT
+        value: production
+      - key: TESTNET
+        value: "false"
+      - key: FACILITATOR_URL
+        value: https://x402.org/facilitator
+
+  - type: cron
+    name: anti-sleep-ping
+    env: python
+    region: frankfurt
+    schedule: "*/10 * * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: echo "pinger"
+    # Pings /health every 10 min to prevent Render free tier cold start
+    envVars:
+      - key: HEALTH_URL
+        value: https://ai-agent-api.onrender.com/health
