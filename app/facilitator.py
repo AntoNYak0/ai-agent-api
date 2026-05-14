@@ -1,7 +1,7 @@
 """Custom x402 facilitator — no Coinbase dependency.
 
 Testnet: auto-approves payments (for testing).
-Mainnet: verifies USDC transfers via public Base RPC.
+Mainnet: verifies USDC transfers via public Base/Polygon RPC.
 """
 from x402.schemas import (
     PaymentPayload,
@@ -12,19 +12,24 @@ from x402.schemas import (
     SupportedKind,
 )
 
+RPC_URLS = {
+    "eip155:8453": "https://mainnet.base.org",
+    "eip155:137": "https://polygon-rpc.com",
+}
+
 
 class DirectFacilitator:
     """Self-hosted facilitator that verifies USDC payments directly."""
 
     def __init__(self, testnet: bool = True, pay_to: str = ""):
         self.testnet = testnet
-        self.pay_to = pay_to
+        self.pay_to = pay_to.lower() if pay_to else ""
 
     def get_supported(self) -> SupportedResponse:
         networks = (
-            ["eip155:84532"]  # Base Sepolia (testnet)
+            ["eip155:84532"]
             if self.testnet
-            else ["eip155:8453", "eip155:137"]  # Base + Polygon mainnet
+            else ["eip155:8453", "eip155:137"]
         )
         return SupportedResponse(
             kinds=[
@@ -50,7 +55,6 @@ class DirectFacilitator:
                 payer=payload.payload.get("payer", "testnet"),
             )
 
-        # Mainnet: verify via public RPC
         return await self._verify_onchain(payload, requirements)
 
     async def _verify_onchain(
@@ -58,10 +62,11 @@ class DirectFacilitator:
         payload: PaymentPayload,
         requirements: PaymentRequirements,
     ) -> VerifyResponse:
-        """Verify a real USDC payment via Base public RPC."""
+        """Verify a real USDC payment via public RPC."""
         import httpx
 
-        rpc_url = "https://mainnet.base.org"
+        network = requirements.network
+        rpc_url = RPC_URLS.get(network, "https://mainnet.base.org")
         tx_hash = payload.payload.get("transactionHash", "")
 
         if not tx_hash:
@@ -72,7 +77,8 @@ class DirectFacilitator:
             )
 
         try:
-            async with httpx.AsyncClient(timeout=15) as client:
+            async with httpx.AsyncClient(timeout=20) as client:
+                # 1. Get transaction receipt
                 resp = await client.post(
                     rpc_url,
                     json={
@@ -89,7 +95,7 @@ class DirectFacilitator:
                     return VerifyResponse(
                         is_valid=False,
                         invalid_reason="tx_not_found",
-                        invalid_message=f"Transaction {tx_hash} not found on chain",
+                        invalid_message=f"Transaction {tx_hash[:10]}... not found. Wait for confirmation.",
                     )
 
                 if receipt.get("status") != "0x1":
@@ -97,6 +103,27 @@ class DirectFacilitator:
                         is_valid=False,
                         invalid_reason="tx_failed",
                         invalid_message="Transaction reverted or failed",
+                    )
+
+                # 2. Get transaction details to verify recipient
+                resp2 = await client.post(
+                    rpc_url,
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "eth_getTransactionByHash",
+                        "params": [tx_hash],
+                    },
+                )
+                tx_data = resp2.json().get("result", {}) or {}
+                to_addr = (tx_data.get("to") or "").lower()
+
+                # 3. Check the USDC was sent to our wallet
+                if self.pay_to and to_addr != self.pay_to:
+                    return VerifyResponse(
+                        is_valid=False,
+                        invalid_reason="wrong_recipient",
+                        invalid_message=f"USDC sent to {to_addr}, expected {self.pay_to}",
                     )
 
                 return VerifyResponse(
@@ -124,11 +151,10 @@ class DirectFacilitator:
                 amount=requirements.amount,
             )
 
-        tx_hash = payload.payload.get("transactionHash", "settled")
         return SettleResponse(
             success=True,
             payer=payload.payload.get("payer", ""),
-            transaction=tx_hash,
+            transaction=payload.payload.get("transactionHash", ""),
             network=requirements.network,
             amount=requirements.amount,
         )
