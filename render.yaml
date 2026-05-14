@@ -21,10 +21,6 @@ services:
     name: anti-sleep-ping
     env: python
     region: frankfurt
-    schedule: "*/10 * * * *"
-    buildCommand: pip install -r requirements.txt
-    startCommand: echo "pinger"
-    # Pings /health every 10 min to prevent Render free tier cold start
-    envVars:
-      - key: HEALTH_URL
-        value: https://ai-agent-api.onrender.com/health
+    schedule: "*/7 * * * *"
+    buildCommand: pip install requests
+    startCommand: python -c "import requests; r = requests.get('https://ai-agent-api.onrender.com/health'); print(r.status_code, r.text)"
