@@ -1,12 +1,22 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.x402_setup import configure_x402
 from app.routes import audit, refactor, docs
+from app.mcp_server import mcp as mcp_app
 
 app = FastAPI(
     title="AI Agent API",
     description="Платные AI-услуги: аудит кода, рефакторинг, документация. Оплата через x402 (USDC).",
     version="1.0.0",
+)
+
+# CORS — allow agents from anywhere to call MCP tools
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 configure_x402(
@@ -20,6 +30,9 @@ configure_x402(
 app.include_router(audit.router)
 app.include_router(refactor.router)
 app.include_router(docs.router)
+
+# Mount MCP server at /mcp — other AI agents connect here
+app.mount("/mcp", mcp_app.sse_app())
 
 
 @app.get("/health")
