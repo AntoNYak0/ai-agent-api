@@ -1,8 +1,6 @@
 from fastapi import FastAPI
 from x402 import x402ResourceServer
 from x402.http import (
-    HTTPFacilitatorClient,
-    FacilitatorConfig,
     RouteConfig,
     PaymentOption,
 )
@@ -10,30 +8,27 @@ from x402.http.middleware.fastapi import (
     payment_middleware,
     PaywallConfig,
 )
-from x402.mechanisms.evm.exact import (
-    ExactEvmServerScheme,
-    register_exact_evm_server,
-)
+from x402.mechanisms.evm.exact import register_exact_evm_server
+
+from app.facilitator import DirectFacilitator
 
 
 def configure_x402(
     app: FastAPI,
     pay_to_evm: str,
     pay_to_solana: str | None,
-    facilitator_url: str,
+    facilitator_url: str,  # kept for signature compatibility, unused
     testnet: bool = True,
 ) -> None:
-    # 1. Facilitator client
-    facilitator = HTTPFacilitatorClient(
-        FacilitatorConfig(url=facilitator_url)
-    )
+    # 1. Custom facilitator — no Coinbase, no x402.org
+    facilitator = DirectFacilitator(testnet=testnet, pay_to=pay_to_evm)
 
-    # 2. Resource server — handles payment verification and settlement
+    # 2. Resource server with our facilitator
     server = x402ResourceServer(facilitator)
 
-    # 3. Register networks
+    # 3. Register EVM networks and schemes
     base_net = "eip155:84532" if testnet else "eip155:8453"
-    polygon_net = "eip155:137"  # Polygon PoS mainnet (testnet uses same but less testing)
+    polygon_net = "eip155:137"
 
     register_exact_evm_server(server, [base_net, polygon_net])
 
@@ -64,7 +59,7 @@ def configure_x402(
                         "type": "object",
                         "properties": {
                             "code": {"type": "string", "description": "Код для аудита"},
-                            "context": {"type": "string", "description": "Дополнительный контекст проекта"},
+                            "context": {"type": "string", "description": "Дополнительный контекст"},
                         },
                         "required": ["code"],
                     },
@@ -115,7 +110,7 @@ def configure_x402(
         ),
     }
 
-    # 5. Paywall branding (visible in 402 paywall)
+    # 5. Paywall branding
     paywall = PaywallConfig(
         app_name="AI Agent API — Аудит, Рефакторинг, Документация",
     )
