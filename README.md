@@ -6,13 +6,13 @@
 
 ```bash
 # Get service manifest
-curl http://agent-api-ai.duckdns.org:8000/.well-known/x402
+curl https://agent-api-ai.duckdns.org/.well-known/x402
 
 # Get OpenAPI 3.1 spec
-curl http://agent-api-ai.duckdns.org:8000/.well-known/openapi.json
+curl https://agent-api-ai.duckdns.org/.well-known/openapi.json
 
 # Request without payment → 402 Payment Required
-curl -X POST http://agent-api-ai.duckdns.org:8000/api/validate-json \
+curl -X POST https://agent-api-ai.duckdns.org/api/validate-json \
   -H "Content-Type: application/json" \
   -d '{"data": "{\"name\": \"test\"}"}'
 # → HTTP 402 + PAYMENT-REQUIRED header with price and payment details
@@ -50,7 +50,7 @@ curl -X POST http://agent-api-ai.duckdns.org:8000/api/validate-json \
 
 ### x402 (AI agents)
 
-Send USDC on Base, Arbitrum, Optimism (EVM address) or USDT on Tron. Then call with `payment_tx=<hash>`.
+USDC on Base, Arbitrum, Optimism or USDT on Tron. All EVM chains use the same wallet.
 
 | Network | Token | Wallet |
 |---------|-------|--------|
@@ -63,13 +63,13 @@ Send USDC on Base, Arbitrum, Optimism (EVM address) or USDT on Tron. Then call w
 
 ```bash
 # Create key
-curl -X POST http://agent-api-ai.duckdns.org:8000/billing/create-key
+curl -X POST https://agent-api-ai.duckdns.org/billing/create-key
 
 # Check balance
-curl "http://agent-api-ai.duckdns.org:8000/billing/balance?key=ak-YOUR_KEY"
+curl "https://agent-api-ai.duckdns.org/billing/balance?key=ak-YOUR_KEY"
 
 # Call with key
-curl -X POST http://agent-api-ai.duckdns.org:8000/api/validate-json \
+curl -X POST https://agent-api-ai.duckdns.org/api/validate-json \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer ak-YOUR_KEY" \
   -d '{"data": "{\"name\": \"test\"}"}'
@@ -77,17 +77,14 @@ curl -X POST http://agent-api-ai.duckdns.org:8000/api/validate-json \
 
 ## MCP (AI Agent Connection)
 
-AI agents connect via Model Context Protocol:
-
 ```
-Endpoint: http://agent-api-ai.duckdns.org:8000/mcp/sse
+SSE Endpoint: https://agent-api-ai.duckdns.org/mcp/sse
 ```
 
-All 16 tools available with `tool_name(code, ..., payment_tx="0x...")` (x402) or `tool_name(code, ..., api_key="ak-...")` (credits).
+Listed on: mcp.so, Smithery.ai, Glama.ai
 
 ## Response Format
 
-All endpoints return JSON:
 ```json
 {
   "result": "{\"valid\": true, \"errors\": [], \"warnings\": []}",
@@ -96,20 +93,10 @@ All endpoints return JSON:
 }
 ```
 
-## Tech Stack
-
-- **Model**: DeepSeek V4 Pro (1M token context)
-- **Protocol**: x402 v2 (Coinbase payment standard)
-- **Facilitator**: DirectFacilitator (on-chain RPC verification, no external dependency)
-- **Networks**: Base, Arbitrum, Optimism (USDC), Tron (USDT)
-- **Framework**: FastAPI + FastMCP
-- **Transport**: HTTP REST + MCP SSE
-- **Domain**: DuckDNS (agent-api-ai.duckdns.org)
-
 ## Links
 
-- [OpenAPI Spec](http://agent-api-ai.duckdns.org:8000/.well-known/openapi.json)
-- [x402 Manifest](http://agent-api-ai.duckdns.org:8000/.well-known/x402)
-- [Health Check](http://agent-api-ai.duckdns.org:8000/health)
-- [Dashboard](http://agent-api-ai.duckdns.org:8000/)
+- [Dashboard](https://agent-api-ai.duckdns.org/)
+- [Health Check](https://agent-api-ai.duckdns.org/health)
+- [OpenAPI Spec](https://agent-api-ai.duckdns.org/.well-known/openapi.json)
+- [x402 Manifest](https://agent-api-ai.duckdns.org/.well-known/x402)
 - [GitHub](https://github.com/AntoNYak0/ai-agent-api)

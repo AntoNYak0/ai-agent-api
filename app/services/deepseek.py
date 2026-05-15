@@ -5,6 +5,11 @@ from app.config import settings
 
 logger = logging.getLogger("deepseek")
 
+
+class DeepSeekError(Exception):
+    """Raised when DeepSeek API is unavailable after all retries."""
+    pass
+
 client = AsyncOpenAI(
     base_url=settings.deepseek_base_url,
     api_key=settings.deepseek_api_key,
@@ -50,7 +55,7 @@ async def deepseek_completion(
                 await asyncio.sleep(delay)
             else:
                 logger.error(f"DeepSeek failed after {MAX_RETRIES} attempts: {e}")
-                raise
+                raise DeepSeekError(f"DeepSeek API unavailable after {MAX_RETRIES} retries") from e
 
 
 async def deepseek_completion_stream(
@@ -94,4 +99,4 @@ async def deepseek_completion_stream(
                 await asyncio.sleep(delay)
             else:
                 logger.error(f"DeepSeek stream failed after {MAX_RETRIES} attempts: {e}")
-                raise
+                raise DeepSeekError(f"DeepSeek API unavailable after {MAX_RETRIES} retries") from e

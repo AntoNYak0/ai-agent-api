@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     testnet: bool = True
     environment: str = "development"
 
+    # Feature flags
+    x402_enabled: bool = True  # set to false to bypass payment wall for testing
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 

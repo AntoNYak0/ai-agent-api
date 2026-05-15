@@ -1,13 +1,15 @@
 """Оплата через PayAI фасилитатор (gasless EIP-3009) + вызов API."""
 
 import asyncio, os, sys
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv("c:/Users/Admin/Desktop/agent-api/scripts/.env")
-load_dotenv("c:/Users/Admin/Desktop/agent-api/.env")
+# Load .env from scripts/ directory, then project root
+load_dotenv(Path(__file__).parent / ".env")
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 PRIVATE_KEY = os.getenv("PRIVATE_KEY", "")
-API_URL = os.getenv("API_URL", "https://0255cb691da1435d-176-197-214-150.serveousercontent.com")
+API_URL = os.getenv("API_URL", "https://agent-api-ai.duckdns.org")
 
 if not PRIVATE_KEY:
     print("Need PRIVATE_KEY in scripts/.env")

@@ -33,7 +33,7 @@ load_dotenv(env_path)
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 PRIVATE_KEY = os.getenv("PRIVATE_KEY", "")
-API_URL = os.getenv("API_URL", "https://67210397d5e3e27e-176-197-214-150.serveousercontent.com")
+API_URL = os.getenv("API_URL", "https://agent-api-ai.duckdns.org")
 
 if not PRIVATE_KEY:
     print("ОШИБКА: PRIVATE_KEY не задан.")

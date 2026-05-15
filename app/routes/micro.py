@@ -13,6 +13,8 @@ from app.prompts.micro import (
     TRANSLATE_CODE_PROMPT, GENERATE_REGEX_PROMPT, FORMAT_DATA_PROMPT,
     SUMMARIZE_PROMPT, NL_TO_SQL_PROMPT, SQL_TO_NL_PROMPT, GIT_SUMMARIZE_PROMPT,
 )
+from app.x402_setup import settle_actual_usage, validate_min_price
+from fastapi.responses import JSONResponse
 
 router = APIRouter()
 
@@ -40,8 +42,8 @@ def _get_tx(request: Request) -> str:
         return "unknown"
 
 
-def _deduct_and_track(request: Request, service: str, tokens_used: int = 0):
-    """Deduct credits for API key users and track the call."""
+async def _deduct_and_track(request: Request, service: str, tokens_used: int = 0):
+    """Deduct credits for API key users, settle for x402, and track the call."""
     is_api_key = hasattr(request.state, "human_api_key")
     microunits = _CREDIT_PRICES.get(service, 10000)
     if tokens_used:
@@ -53,6 +55,7 @@ def _deduct_and_track(request: Request, service: str, tokens_used: int = 0):
         amount_usd = cost_cents / 100
         method = "api_key"
     else:
+        await settle_actual_usage(request, microunits)
         amount_usd = microunits / 1e6
         method = "x402"
 
@@ -67,7 +70,22 @@ def _deduct_and_track(request: Request, service: str, tokens_used: int = 0):
 async def validate_json(request: Request, body: ValidateJsonRequest):
     content = f"Target schema:\n{body.target_schema}\n\nData:\n{body.data}" if body.target_schema else body.data
     result, _ = await deepseek_completion(VALIDATE_JSON_PROMPT, content, json_mode=True)
-    _deduct_and_track(request, "validate-json")
+
+    # Free trial: if no API key and no x402 payment, execute without charging
+    has_api_key = hasattr(request.state, "human_api_key")
+    has_x402 = hasattr(request.state, "payment_payload")
+    if not has_api_key and not has_x402:
+        analytics.track("validate-json", "free_trial", True, 0, 0.0)
+        response = JSONResponse(content={
+            "result": result,
+            "payment_network": "free_trial",
+            "payment_tx": "free_trial",
+            "trial_note": "First call free. Subsequent calls require x402 payment or API key.",
+        })
+        response.headers["X-Free-Trial"] = "true"
+        return response
+
+    await _deduct_and_track(request, "validate-json")
     return ServiceResponse(result=result, payment_network=_get_network(request), payment_tx=_get_tx(request))
 
 
@@ -75,29 +93,33 @@ async def validate_json(request: Request, body: ValidateJsonRequest):
 async def classify_text(request: Request, body: ClassifyTextRequest):
     content = f"Categories hint: {body.categories or 'auto-detect'}\n\nText:\n{body.text}"
     result, _ = await deepseek_completion(CLASSIFY_TEXT_PROMPT, content, json_mode=True)
-    _deduct_and_track(request, "classify-text")
+    await _deduct_and_track(request, "classify-text")
     return ServiceResponse(result=result, payment_network=_get_network(request), payment_tx=_get_tx(request))
 
 
 @router.post("/api/extract-data")
 async def extract_data(request: Request, body: ExtractDataRequest):
     result, _ = await deepseek_completion(EXTRACT_DATA_PROMPT, body.text, json_mode=True)
-    _deduct_and_track(request, "extract-data")
+    await _deduct_and_track(request, "extract-data")
     return ServiceResponse(result=result, payment_network=_get_network(request), payment_tx=_get_tx(request))
 
 
 @router.post("/api/translate-code")
 async def translate_code(request: Request, body: TranslateCodeRequest):
+    ok, err = validate_min_price(request, 10_000)
+    if not ok:
+        return JSONResponse(status_code=402, content=err,
+            headers={"PAYMENT-REQUIRED": "true"})
     prompt = TRANSLATE_CODE_PROMPT.format(source_lang=body.source_lang, target_lang=body.target_lang)
     result, tokens = await deepseek_completion(prompt, body.code, json_mode=True)
-    _deduct_and_track(request, "translate-code", tokens)
+    await _deduct_and_track(request, "translate-code", tokens)
     return ServiceResponse(result=result, payment_network=_get_network(request), payment_tx=_get_tx(request))
 
 
 @router.post("/api/generate-regex")
 async def generate_regex(request: Request, body: GenerateRegexRequest):
     result, _ = await deepseek_completion(GENERATE_REGEX_PROMPT, body.description, json_mode=True)
-    _deduct_and_track(request, "generate-regex")
+    await _deduct_and_track(request, "generate-regex")
     return ServiceResponse(result=result, payment_network=_get_network(request), payment_tx=_get_tx(request))
 
 
@@ -105,7 +127,7 @@ async def generate_regex(request: Request, body: GenerateRegexRequest):
 async def format_data(request: Request, body: FormatDataRequest):
     prompt = FORMAT_DATA_PROMPT.format(source_format=body.source_format, target_format=body.target_format)
     result, _ = await deepseek_completion(prompt, body.data, json_mode=True)
-    _deduct_and_track(request, "format-data")
+    await _deduct_and_track(request, "format-data")
     return ServiceResponse(result=result, payment_network=_get_network(request), payment_tx=_get_tx(request))
 
 
@@ -113,7 +135,7 @@ async def format_data(request: Request, body: FormatDataRequest):
 async def summarize(request: Request, body: SummarizeRequest):
     prompt = SUMMARIZE_PROMPT.format(max_length=body.max_length)
     result, _ = await deepseek_completion(prompt, body.text, json_mode=True)
-    _deduct_and_track(request, "summarize")
+    await _deduct_and_track(request, "summarize")
     return ServiceResponse(result=result, payment_network=_get_network(request), payment_tx=_get_tx(request))
 
 
@@ -121,20 +143,32 @@ async def summarize(request: Request, body: SummarizeRequest):
 
 @router.post("/api/nl-to-sql")
 async def nl_to_sql(request: Request, body: NlToSqlRequest):
+    ok, err = validate_min_price(request, 5_000)
+    if not ok:
+        return JSONResponse(status_code=402, content=err,
+            headers={"PAYMENT-REQUIRED": "true"})
     result, tokens = await deepseek_completion(NL_TO_SQL_PROMPT, body.query, json_mode=True)
-    _deduct_and_track(request, "nl-to-sql", tokens)
+    await _deduct_and_track(request, "nl-to-sql", tokens)
     return ServiceResponse(result=result, payment_network=_get_network(request), payment_tx=_get_tx(request))
 
 
 @router.post("/api/sql-to-nl")
 async def sql_to_nl(request: Request, body: SqlToNlRequest):
+    ok, err = validate_min_price(request, 5_000)
+    if not ok:
+        return JSONResponse(status_code=402, content=err,
+            headers={"PAYMENT-REQUIRED": "true"})
     result, tokens = await deepseek_completion(SQL_TO_NL_PROMPT, body.sql, json_mode=True)
-    _deduct_and_track(request, "sql-to-nl", tokens)
+    await _deduct_and_track(request, "sql-to-nl", tokens)
     return ServiceResponse(result=result, payment_network=_get_network(request), payment_tx=_get_tx(request))
 
 
 @router.post("/api/git-summarize")
 async def git_summarize(request: Request, body: GitSummarizeRequest):
+    ok, err = validate_min_price(request, 5_000)
+    if not ok:
+        return JSONResponse(status_code=402, content=err,
+            headers={"PAYMENT-REQUIRED": "true"})
     result, tokens = await deepseek_completion(GIT_SUMMARIZE_PROMPT, body.diff, json_mode=True)
-    _deduct_and_track(request, "git-summarize", tokens)
+    await _deduct_and_track(request, "git-summarize", tokens)
     return ServiceResponse(result=result, payment_network=_get_network(request), payment_tx=_get_tx(request))

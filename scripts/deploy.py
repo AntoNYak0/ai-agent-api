@@ -1,10 +1,10 @@
 """Deploy updated files to VPS via SFTP and restart agent-api."""
 import os
+import sys
 import paramiko
 
 HOST = "77.239.107.30"
 USER = "root"
-PASS = "zW8rW6eU3rgZ"
 BASE = "/opt/agent-api"
 
 files = [
@@ -30,13 +30,28 @@ files = [
     "app/routes/solidity_scan.py",
     "app/routes/stream.py",
     "app/services/deepseek.py",
+    "scripts/setup_https.sh",
+    "scripts/monitor.sh",
+    "scripts/backup.sh",
+    "scripts/integration_test.py",
 ]
 
 local_base = r"c:\Users\Admin\Desktop\agent-api"
 
 ssh = paramiko.SSHClient()
 ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-ssh.connect(HOST, username=USER, password=PASS, timeout=15)
+
+password = os.environ.get("VPS_PASSWORD")
+ssh_key_path = os.path.expanduser("~/.ssh/id_rsa")
+
+if password:
+    ssh.connect(HOST, username=USER, password=password, timeout=15)
+elif os.path.exists(ssh_key_path):
+    ssh.connect(HOST, username=USER, key_filename=ssh_key_path, timeout=15)
+else:
+    print("ERROR: No authentication method available.")
+    print("Set VPS_PASSWORD environment variable or ensure ~/.ssh/id_rsa exists.")
+    sys.exit(1)
 sftp = ssh.open_sftp()
 
 for f in files:

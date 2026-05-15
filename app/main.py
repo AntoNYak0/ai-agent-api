@@ -8,6 +8,35 @@ from app.well_known import router as well_known_router
 from app.mcp_server import mcp as mcp_app
 from app.services import credits, rate_limiter, analytics
 
+# ---------------------------------------------------------------------------
+# File logging — production: /opt/agent-api/logs/app.log  (10 MB rotated, 5 backups)
+#               local dev:   ./logs/app.log
+# ---------------------------------------------------------------------------
+import logging
+import os
+from logging.handlers import RotatingFileHandler
+
+LOG_DIR = "/opt/agent-api/logs"
+_log_dir_fallback = "./logs"
+
+if os.path.exists("/opt/agent-api"):
+    os.makedirs(LOG_DIR, exist_ok=True)
+    _handler = RotatingFileHandler(
+        f"{LOG_DIR}/app.log", maxBytes=10 * 1024 * 1024, backupCount=5
+    )
+else:
+    os.makedirs(_log_dir_fallback, exist_ok=True)
+    _handler = RotatingFileHandler(
+        f"{_log_dir_fallback}/app.log", maxBytes=10 * 1024 * 1024, backupCount=5
+    )
+
+_handler.setFormatter(logging.Formatter(
+    "%(asctime)s %(levelname)s %(name)s: %(message)s"
+))
+logging.getLogger().addHandler(_handler)
+logging.getLogger().setLevel(logging.INFO)
+logging.getLogger("uvicorn.access").addHandler(_handler)
+
 app = FastAPI(
     title="AI Agent API",
     description="Paid AI services: code audit, refactoring, docs, DeFi analysis, trading, Solidity scanner, SQL tools. Payment via x402 (USDC) or API key (credits).",
@@ -30,6 +59,41 @@ configure_x402(
     pay_to_solana=settings.pay_to_address_solana,
     testnet=settings.testnet,
 )
+
+@app.middleware("http")
+async def api_versioning_middleware(request: Request, call_next):
+    """Route /api/v1/X to /api/X internally.
+    Registered AFTER configure_x402 so it runs BEFORE x402_payment_middleware
+    (FastAPI middleware is LIFO — last added = outermost = runs first)."""
+    path = request.scope.get("path", "")
+    is_v1 = path.startswith("/api/v1/")
+    if is_v1:
+        request.scope["path"] = path.replace("/api/v1/", "/api/", 1)
+
+    response = await call_next(request)
+
+    if path.startswith("/api/") and not is_v1 and response.status_code < 400:
+        response.headers["Deprecation"] = "true"
+        response.headers["Sunset"] = "Sat, 01 Nov 2026 00:00:00 GMT"
+        response.headers["X-API-Version"] = "use /api/v1/ instead"
+    return response
+
+from app.services.deepseek import DeepSeekError
+
+
+@app.exception_handler(DeepSeekError)
+async def deepseek_error_handler(request: Request, exc: DeepSeekError):
+    """Return 503 when AI backend is down — don't leak stack traces."""
+    logging.getLogger("main").error("DeepSeek unavailable: %s", exc)
+    return JSONResponse(
+        status_code=503,
+        content={
+            "error": "service_unavailable",
+            "message": "AI backend is temporarily unavailable. Please retry in a few seconds.",
+            "retry_after_seconds": 30,
+        },
+        headers={"Retry-After": "30"},
+    )
 
 app.include_router(audit.router)
 app.include_router(refactor.router)
@@ -104,9 +168,29 @@ a {{ color:#58a6ff }}
 </div>
 
 <div class="card">
-<h2>Quick Start</h2>
-<code>curl http://agent-api-ai.duckdns.org:8000/api/validate-json -H "Content-Type: application/json" -d '{{"data":"{{\\"name\\":\\"test\\"}}"}}'</code>
-<p style="margin-top:8px;color:#8b949e;font-size:12px">No payment → 402 with PAYMENT-REQUIRED header. MCP: /mcp/sse</p>
+<h2>Quick Start — Free Trial</h2>
+<code>curl https://agent-api-ai.duckdns.org/api/validate-json -H "Content-Type: application/json" -d '{{"data":"{{\\"name\\":\\"test\\"}}"}}'</code>
+<p style="margin-top:8px;color:#3fb950;font-size:12px">validate-json is FREE — no payment needed. All other endpoints require x402 USDC or API key.</p>
+</div>
+
+<div class="card">
+<h2>Get API Key — Pay with Crypto</h2>
+<p style="color:#8b949e;margin-bottom:12px">Send USDC to the address below, then contact to top up your key. 1 credit = $0.001.</p>
+<div style="background:#0d1117;border-radius:6px;padding:14px;margin-bottom:12px">
+<div style="font-size:12px;color:#8b949e;margin-bottom:4px">USDC (Base / Arbitrum / Optimism)</div>
+<code style="font-size:13px;word-break:break-all">0xdE7eb04faE758055642f67f30D246CcB7136C95E</code>
+</div>
+<div style="background:#0d1117;border-radius:6px;padding:14px;margin-bottom:12px">
+<div style="font-size:12px;color:#8b949e;margin-bottom:4px">USDT (Tron TRC-20)</div>
+<code style="font-size:13px;word-break:break-all">TADavZEHddjYMQcL2cnaFadFVKAUmP9wMw</code>
+</div>
+<table>
+<tr><th>Tier</th><th>Price</th><th>Credits</th><th>Bonus</th></tr>
+<tr><td>Starter</td><td>$10</td><td>10,000</td><td>—</td></tr>
+<tr><td>Pro</td><td>$45</td><td>50,000</td><td>10% extra</td></tr>
+<tr><td>Scale</td><td>$80</td><td>100,000</td><td>20% extra</td></tr>
+</table>
+<p style="margin-top:8px;color:#8b949e;font-size:12px"><a href="/billing/create-key" style="color:#58a6ff">Create free trial key</a> (1000 credits, no payment required).</p>
 </div>
 
 <div class="card">
@@ -128,6 +212,18 @@ Powered by DeepSeek V4 Pro · Payments via x402 Protocol · {rl['tracked_ips']} 
 </html>""")
 
 
+@app.get("/favicon.svg")
+async def favicon():
+    return HTMLResponse(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
+        '<circle cx="16" cy="16" r="15" fill="#2563eb"/>'
+        '<text x="16" y="22" text-anchor="middle" fill="white" font-size="18" font-weight="bold" font-family="Arial">AI</text>'
+        '</svg>',
+        media_type="image/svg+xml",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
 @app.get("/health")
 async def health():
     stats = credits.get_stats()
@@ -139,6 +235,130 @@ async def health():
         "billing": stats,
         "payment_attempts": attempts["total_attempts"],
     }
+
+
+@app.get("/health/deep")
+async def health_deep():
+    """Deep health check — verifies ALL dependencies (DeepSeek, billing, RPCs)."""
+    import time
+
+    from app.services.deepseek import deepseek_completion
+
+    import httpx
+
+    results: dict = {"status": "ok", "checks": {}}
+
+    # DeepSeek API
+    t0 = time.time()
+    try:
+        await deepseek_completion(
+            system_prompt="",
+            user_content="pong",
+            json_mode=False,
+        )
+        results["checks"]["deepseek"] = {
+            "status": "ok",
+            "latency_ms": round((time.time() - t0) * 1000),
+        }
+    except Exception as e:
+        results["checks"]["deepseek"] = {"status": "error", "message": str(e)[:200]}
+        results["status"] = "degraded"
+
+    # Billing storage
+    try:
+        stats = credits.get_stats()
+        results["checks"]["billing"] = {
+            "status": "ok",
+            "total_keys": stats.get("total_keys", 0),
+        }
+    except Exception as e:
+        results["checks"]["billing"] = {"status": "error", "message": str(e)[:200]}
+        results["status"] = "degraded"
+
+    # Facilitator RPCs (check each chain's RPC is reachable)
+    rpcs = {
+        "base": "https://mainnet.base.org",
+        "arbitrum": "https://arb1.arbitrum.io/rpc",
+        "optimism": "https://mainnet.optimism.io",
+        "tron": "https://api.trongrid.io",
+    }
+    async with httpx.AsyncClient(timeout=10) as client:
+        for chain, rpc_url in rpcs.items():
+            t0 = time.time()
+            try:
+                r = await client.post(
+                    rpc_url,
+                    json={
+                        "jsonrpc": "2.0",
+                        "method": "eth_blockNumber",
+                        "params": [],
+                        "id": 1,
+                    },
+                )
+                if r.status_code == 200:
+                    results["checks"][f"rpc_{chain}"] = {
+                        "status": "ok",
+                        "latency_ms": round((time.time() - t0) * 1000),
+                    }
+                else:
+                    results["checks"][f"rpc_{chain}"] = {
+                        "status": "error",
+                        "code": r.status_code,
+                    }
+                    results["status"] = "degraded"
+            except Exception as e:
+                results["checks"][f"rpc_{chain}"] = {
+                    "status": "error",
+                    "message": str(e)[:200],
+                }
+                results["status"] = "degraded"
+
+    # Override: if deepseek is down, it's degraded (even if RPCs are fine)
+    return results
+
+
+@app.get("/health/metrics")
+async def health_metrics():
+    """Prometheus-compatible metrics endpoint."""
+    from collections import Counter
+
+    stats = analytics.get_stats(1)
+    attempts = analytics.get_attempts()
+    rl = rate_limiter.get_stats()
+
+    lines = [
+        "# HELP api_calls_total Total API calls (24h)",
+        "# TYPE api_calls_total counter",
+        f"api_calls_total {stats.get('total_calls', 0)}",
+        "# HELP api_revenue_usd_total Revenue in USD (24h)",
+        "# TYPE api_revenue_usd_total counter",
+        f"api_revenue_usd_total {stats.get('total_revenue_usd', 0)}",
+        "# HELP api_errors_total Error responses (24h)",
+        "# TYPE api_errors_total counter",
+        f"api_errors_total {stats.get('errors', 0)}",
+        "# HELP api_conversion_rate Conversion rate percent",
+        "# TYPE api_conversion_rate gauge",
+        f"api_conversion_rate {stats.get('conversion_rate', 0)}",
+        "# HELP api_payment_attempts_total 402 attempts since restart",
+        "# TYPE api_payment_attempts_total counter",
+        f"api_payment_attempts_total {attempts.get('total_attempts', 0)}",
+        "# HELP api_rate_limited_ips Tracked IPs",
+        "# TYPE api_rate_limited_ips gauge",
+        f"api_rate_limited_ips {rl.get('tracked_ips', 0)}",
+        "# HELP api_active_keys Active API keys",
+        "# TYPE api_active_keys gauge",
+        f"api_active_keys {credits.get_stats().get('active_keys', 0)}",
+    ]
+
+    # Per-tool breakdown
+    by_tool = stats.get("by_tool", {})
+    lines.append(f"# HELP api_calls_by_tool Calls per tool (24h)")
+    lines.append(f"# TYPE api_calls_by_tool gauge")
+    for tool, count in by_tool.items():
+        lines.append(f'api_calls_by_tool{{tool="{tool}"}} {count}')
+
+    lines.append("")
+    return JSONResponse(content="\n".join(lines), media_type="text/plain; charset=utf-8")
 
 
 @app.middleware("http")
@@ -176,9 +396,11 @@ async def rate_limit_middleware(request: Request, call_next):
     ip = ip.split(",")[0].strip()
 
     if not rate_limiter.is_allowed(ip):
+        logging.warning("Rate limit hit — IP: %s, path: %s", ip, path)
         return JSONResponse(
             status_code=429,
             content={"error": "Too many requests", "retry_after_seconds": 60},
         )
 
+    logging.debug("Request allowed — IP: %s, path: %s, method: %s", ip, path, request.method)
     return await call_next(request)

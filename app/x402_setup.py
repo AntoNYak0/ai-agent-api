@@ -15,8 +15,103 @@ from x402.mechanisms.evm.exact import register_exact_evm_server
 
 from x402.http.facilitator_client import HTTPFacilitatorClient, FacilitatorConfig
 from app.facilitator import DirectFacilitator
+from app.config import settings
 
 logger = logging.getLogger("x402")
+
+# Token rate: $0.003 per 1K tokens (DeepSeek cost ~$0.0014/1K, x2 margin)
+PER_1K_TOKENS_MICROUNITS = 3000
+
+
+def validate_min_price(request, min_microunits: int):
+    """Check x402 payment has sufficient authorized amount BEFORE calling AI.
+    Returns (ok: bool, error_json: dict | None).
+    Call BEFORE deepseek_completion in upto routes to avoid wasting tokens on underpayment.
+    """
+    from fastapi.responses import JSONResponse
+
+    # API key users have their own credit system — skip check
+    if hasattr(request.state, "human_api_key"):
+        return True, None
+
+    # No payment info at all — let x402 middleware handle it
+    if not hasattr(request.state, "payment_requirements"):
+        return True, None
+
+    try:
+        authorized = int(request.state.payment_requirements.amount)
+    except (ValueError, TypeError):
+        return True, None
+
+    if authorized < min_microunits:
+        mins = min_microunits / 1e6
+        auths = authorized / 1e6
+        return False, {
+            "error": "insufficient_payment",
+            "message": f"Payment authorized ${auths:.4f}, minimum ${mins:.4f}. Please authorize at least ${mins:.4f} USDC.",
+            "authorized_microunits": authorized,
+            "min_required_microunits": min_microunits,
+            "retry_with_higher_amount": True,
+        }
+    return True, None
+
+
+async def settle_actual_usage(request, actual_microunits: int):
+    """Settle x402 payment with ACTUAL (not max) amount — the core of upto pricing.
+
+    Call AFTER AI inference completes. Only settles for x402 crypto payments
+    (skips API key users and testnet). Retries 3 times with backoff on facilitator failure.
+    """
+    import asyncio
+    from x402.schemas import PaymentPayload, PaymentRequirements
+
+    # Only settle for real x402 payments (not API keys, not testnet)
+    if hasattr(request.state, "human_api_key"):
+        return
+    if not hasattr(request.state, "payment_payload"):
+        return
+
+    facilitator = getattr(request.app.state, "x402_facilitator", None)
+    if not facilitator:
+        return
+
+    pay_to = request.app.state.x402_pay_to
+    payload_obj = request.state.payment_payload
+    reqs = request.state.payment_requirements
+
+    settle_payload = PaymentPayload(
+        x402_version=2,
+        payload=payload_obj.payload if hasattr(payload_obj, 'payload') else {"payer": "rest-client"},
+        accepted=PaymentRequirements(
+            scheme="exact",  # settlement is always exact amount
+            network=getattr(reqs, 'network', 'eip155:8453'),
+            asset=getattr(reqs, 'asset', '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'),
+            amount=str(actual_microunits),
+            pay_to=pay_to,
+            max_timeout_seconds=300,
+        ),
+    )
+
+    for attempt in range(3):
+        try:
+            await facilitator.settle(settle_payload)
+            request.state.x402_settled = True
+            request.state.x402_settled_amount = actual_microunits
+            logger.info("Settled actual: %d microunits (~$%.4f)%s",
+                actual_microunits, actual_microunits / 1e6,
+                f" (attempt {attempt + 1})" if attempt > 0 else "")
+            return
+        except Exception as e:
+            if attempt < 2:
+                delay = [1.0, 2.0][attempt]
+                logger.warning("Settle attempt %d failed: %s. Retry in %.1fs...", attempt + 1, e, delay)
+                await asyncio.sleep(delay)
+            else:
+                logger.warning("Settle failed after 3 attempts (non-critical, result still delivered): %s", e)
+
+    # Best effort: mark as settled even if facilitator failed
+    request.state.x402_settled = True
+    request.state.x402_settled_amount = actual_microunits
 
 # Solana mainnet (reserved for future use)
 SOLANA_NET = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"
@@ -82,16 +177,38 @@ def configure_x402(
         logger.info("x402: using DirectFacilitator (mainnet — onchain RPC verification)")
     server = x402ResourceServer(facilitator)
 
-    base_net = "eip155:84532" if testnet else "eip155:8453"
-    # Only register networks that the facilitator (Dexter) supports for exact EVM scheme
-    evm_networks = [base_net]
+    if testnet:
+        evm_networks = [
+            "eip155:84532",      # Base Sepolia
+            "eip155:421614",     # Arbitrum Sepolia
+            "eip155:11155420",   # Optimism Sepolia
+        ]
+    else:
+        evm_networks = [
+            "eip155:8453",       # Base mainnet
+            "eip155:42161",      # Arbitrum mainnet
+            "eip155:10",         # Optimism mainnet
+        ]
     register_exact_evm_server(server, evm_networks)
 
-    # REST x402 middleware only advertises Base (what Dexter verifies)
-    # Arbitrum/Optimism/Tron are listed in well-known manifest + handled via MCP
+    # Store facilitator on app.state so routes can call settle() with actual usage
+    app.state.x402_facilitator = facilitator
+    app.state.x402_pay_to = pay_to_evm
+    logger.info("x402: facilitator stored on app.state — routes will settle with actual usage")
+
     common_networks = list(evm_networks)
 
-    def make_option(network: str, price: str) -> PaymentOption:
+    def make_upto_option(network: str, max_price: str) -> PaymentOption:
+        """Upto/dynamic pricing: client authorizes max, we settle actual usage."""
+        return PaymentOption(
+            scheme="upto",
+            pay_to=pay_to_evm,
+            price=max_price,       # max authorized amount
+            network=network,
+        )
+
+    def make_exact_option(network: str, price: str) -> PaymentOption:
+        """Exact/flat pricing: fixed micro-fee for micro-tasks."""
         return PaymentOption(
             scheme="exact",
             pay_to=pay_to_evm,
@@ -114,9 +231,22 @@ def configure_x402(
 
     routes: dict[str, RouteConfig] = {}
 
-    for route_key, (price, desc) in {**_UPTO_SERVICES, **_EXACT_SERVICES}.items():
+    for route_key, (price, desc) in _UPTO_SERVICES.items():
         routes[route_key] = RouteConfig(
-            accepts=[make_option(net, price) for net in common_networks],
+            accepts=[make_upto_option(net, price) for net in common_networks],
+            description=desc,
+            mime_type="application/json",
+            extensions={
+                "bazaar": {
+                    "discoverable": True,
+                    "inputSchema": _bazaar_schema(route_key),
+                }
+            },
+        )
+
+    for route_key, (price, desc) in _EXACT_SERVICES.items():
+        routes[route_key] = RouteConfig(
+            accepts=[make_exact_option(net, price) for net in common_networks],
             description=desc,
             mime_type="application/json",
             extensions={
@@ -135,17 +265,28 @@ def configure_x402(
 
     x402_mw = payment_middleware(routes, server, paywall_config=paywall)
 
+    networks_help = "Base, Arbitrum, or Optimism"
     PAYMENT_HELP = (
-        "To use this API, send USDC to {pay_to} on Base, "
+        "To use this API, send USDC to {pay_to} on {nets}, "
         "then retry with header payment-signature: <base64-json>. "
-        "MCP: http://agent-api-ai.duckdns.org:8000/mcp/sse "
+        "MCP: https://agent-api-ai.duckdns.org/mcp/sse "
         "Docs: https://github.com/AntoNYak0/ai-agent-api"
-    ).format(pay_to=pay_to_evm)
+    ).format(pay_to=pay_to_evm, nets=networks_help)
 
     @app.middleware("http")
     async def x402_payment_middleware(request, call_next):
         # Human devs with API key skip x402 crypto payment
         if hasattr(request.state, "human_api_key"):
+            return await call_next(request)
+
+        # Feature flag: bypass payment wall when disabled
+        if not settings.x402_enabled:
+            response = await call_next(request)
+            response.headers["X-X402-Bypassed"] = "true"
+            return response
+
+        # Free trial: validate-json is free for first call (no payment required)
+        if request.url.path == "/api/validate-json":
             return await call_next(request)
 
         try:
@@ -171,3 +312,15 @@ def configure_x402(
                     "X-Payment-Help": PAYMENT_HELP.replace("\n", " "),
                 },
             )
+
+    @app.middleware("http")
+    async def x402_response_header_middleware(request, call_next):
+        """Add PAYMENT-RESPONSE header when x402 settlement completed successfully."""
+        response = await call_next(request)
+        if hasattr(request.state, "x402_settled") and request.state.x402_settled:
+            response.headers["PAYMENT-RESPONSE"] = "true"
+            amount = getattr(request.state, "x402_settled_amount", 0)
+            usd = amount / 1e6
+            response.headers["X-Payment-Amount"] = f"${usd:.6f} USDC"
+            logger.info("PAYMENT-RESPONSE: settled %d microunits", amount)
+        return response

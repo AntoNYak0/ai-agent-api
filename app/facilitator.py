@@ -20,6 +20,9 @@ RPC_URLS = {
     "eip155:8453": "https://mainnet.base.org",
     "eip155:42161": "https://arb1.arbitrum.io/rpc",
     "eip155:10": "https://mainnet.optimism.io",
+    "eip155:84532": "https://sepolia.base.org",
+    "eip155:421614": "https://sepolia-rollup.arbitrum.io/rpc",
+    "eip155:11155420": "https://sepolia.optimism.io",
 }
 
 # USDC contract addresses by CAIP-2 network
@@ -28,6 +31,8 @@ USDC_CONTRACTS = {
     "eip155:42161": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",  # Arbitrum mainnet
     "eip155:10": "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85",     # Optimism mainnet
     "eip155:84532": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",  # Base Sepolia testnet
+    "eip155:421614": "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4dD",  # Arbitrum Sepolia testnet
+    "eip155:11155420": "0x5fd84259d66Cd46123540766Be93DFE6D43130D7",  # Optimism Sepolia testnet
 }
 
 # keccak256("Transfer(address,address,uint256)")
@@ -43,7 +48,7 @@ class DirectFacilitator:
 
     def get_supported(self) -> SupportedResponse:
         networks = (
-            ["eip155:84532"]
+            ["eip155:84532", "eip155:421614", "eip155:11155420"]
             if self.testnet
             else ["eip155:8453", "eip155:42161", "eip155:10"]
         )

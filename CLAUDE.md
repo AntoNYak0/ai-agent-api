@@ -4,10 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-AI Agent API — FastAPI + MCP server with 16 paid AI services on DeepSeek V4 Pro (1M context). Two interfaces: HTTP REST API and MCP SSE (`/mcp/sse`). Accepts USDC via x402 (DirectFacilitator with on-chain RPC verification) and API keys (credits for humans).
+AI Agent API — FastAPI + MCP server with 16 paid AI services on DeepSeek V4 Pro (1M context). Two interfaces: HTTP REST and MCP SSE (`/mcp/sse`). Accepts USDC via x402 (DirectFacilitator — Sovereign Mode, on-chain verification) and API keys (pre-loaded credits for humans).
 
-Deploy: `http://agent-api-ai.duckdns.org:8000` (VPS `77.239.107.30`, Ubuntu 24.04, systemd).
-GitHub: `https://github.com/AntoNYak0/ai-agent-api`.
+Production URL: `https://agent-api-ai.duckdns.org` (VPS `77.239.107.30`, Ubuntu 24.04, systemd). HTTPS via Nginx + Let's Encrypt.
 
 ## Commands
 
@@ -18,134 +17,145 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 # Tests
 pytest tests/ -v
 
-# Deploy to VPS (SFTP via paramiko + systemctl restart)
+# Deploy to VPS
+# VPS: 77.239.107.30, root. Password in scripts/deploy.py or VPS_PASSWORD env.
 python scripts/deploy.py
 
 # Check status
-curl http://agent-api-ai.duckdns.org:8000/health
-curl http://agent-api-ai.duckdns.org:8000/
-curl http://agent-api-ai.duckdns.org:8000/.well-known/x402
+curl https://agent-api-ai.duckdns.org/health
+curl https://agent-api-ai.duckdns.org/.well-known/x402
 
-# Test scripts
-python scripts/test_payment.py       # 9 tests: REST + API keys + replay
-python scripts/test_dexter.py        # 7 tests: x402 + Dexter + manifest
-python examples/client.py            # Interactive client (3 modes)
+# View VPS logs
+python -c "
+import paramiko; c = paramiko.SSHClient()
+c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+c.connect('77.239.107.30', username='root', password='...')
+_,o,_ = c.exec_command('journalctl -u agent-api --no-pager -n 50')
+print(o.read().decode(errors='replace'))
+c.close()
+"
 ```
 
 ## Architecture
 
 ### Two interfaces (synchronized)
 
-**REST API** (`app/routes/*.py`) — 16 FastAPI routes. English JSON prompts, `json_mode=True`, 3x retries, credit deduction for humans. Payment: x402 middleware for agents, skipped if `request.state.human_api_key`.
+**REST API** (`app/routes/*.py`) — 16 FastAPI POST routes. English JSON prompts, `json_mode=True`, 3x DeepSeek retries. Payment: x402 middleware for agents, API key bypass for humans.
 
-**MCP Server** (`app/mcp_server.py`) — 16 FastMCP tools. Same prompts, 3x retries, `json_mode=True`, replay protection, upto pricing. Primary interface for AI agents via `/mcp/sse`.
-
-**Streaming** (`app/routes/stream.py`) — SSE endpoint `POST /api/stream/{tool}` for 5 AI services. Chunks via `text/event-stream`.
+**MCP Server** (`app/mcp_server.py`) — 16 FastMCP tools. Same prompts, same retries, replay protection, upto pricing. SSE transport at `/mcp/sse`.
 
 ### Payment flow
 
 ```
 REST:
-  Human: Authorization: Bearer ak-... → API key middleware → x402 skip → handler → deduct credits
-  Agent: POST /api/audit → 402 + X-Payment-Help header → pays USDC →
-         retry with payment-signature: <base64-PaymentPayload> → DirectFacilitator RPC verification → handler
+  Human:  Authorization: Bearer ak-... → api_key middleware → skip x402 → handler → deduct credits
+  Agent:  POST /api/audit → 402 + X-Payment-Help → pays USDC →
+          retry with payment-signature: <base64-PaymentPayload> → DirectFacilitator RPC verify →
+          handler → settle_actual_usage (3 retries, 1s/2s backoff)
 
 MCP (SSE):
-  Human: audit_tool(code, api_key="ak-...") → _verify_payment → credits check → spend_credits
-  Agent: audit_tool(code, payment_tx="0x...") → _verify_payment → DirectFacilitator.verify() → settle
+  Human:  audit_tool(code, api_key="ak-...") → credits check → spend_credits
+  Agent:  audit_tool(code, payment_tx="0x...") → DirectFacilitator.verify() → settle
 ```
 
-### Payment-signature header
-
-Base64-encoded JSON with `x402Version: 2`, `payload.transactionHash`, `accepted` (scheme, network, asset, amount, payTo, maxTimeoutSeconds). Format in `examples/client.py`.
-
-### Middleware chain (main.py, reverse-order execution)
+### Middleware chain (main.py — FastAPI LIFO: last added = outermost = runs first)
 
 1. `rate_limit_middleware` — 10 req/min/IP, skips `/health` and `/.well-known/*`
 2. `cache_control_middleware` — `Cache-Control: no-store` on `/api/*`
 3. `human_api_key_middleware` — detects `Authorization: Bearer ak-...`, sets `request.state.human_api_key`
-4. `x402_payment_middleware` — checks API key flag, otherwise x402; adds `X-Payment-Help` on 402
+4. `api_versioning_middleware` — rewrites `/api/v1/X` → `/api/X`, adds Deprecation header to old `/api/X` (sunset Nov 2026)
+5. `x402_payment_middleware` — skips if API key present or `X402_ENABLED=false`; otherwise payment wall
+6. `x402_response_header_middleware` — adds `PAYMENT-RESPONSE: true` + `X-Payment-Amount` after settlement
 
-### Facilitator
+### Facilitator (Sovereign Mode)
 
-**Production:** `DirectFacilitator(testnet=False, pay_to=...)` — verifies ERC-20 Transfer events via public RPCs. Client sends `transactionHash` in `payment-signature` header, facilitator reads receipt, finds Transfer event, verifies recipient + amount + token contract address.
+`DirectFacilitator(testnet=False, pay_to=...)` — verifies ERC-20 Transfer events via public RPCs (Base, Arbitrum, Optimism). No external facilitator dependency. Client sends `transactionHash`, facilitator reads on-chain receipt, verifies recipient + amount + token contract.
 
-**Testnet:** `DirectFacilitator(testnet=True)` — auto-approves without blockchain.
+`TronFacilitator(pay_to_tron=...)` — TRC-20 USDT verification via TronGrid API. MCP tools only.
 
-**TRON:** `TronFacilitator(pay_to_tron=...)` — verifies TRC-20 USDT transfers via TronGrid API. Used only by MCP tools; REST x402 middleware delegates EVM to DirectFacilitator.
-
-Dexter (`HTTPFacilitatorClient`) is imported but NOT used — DirectFacilitator does on-chain verification directly, avoiding EIP-3009 Permit2 dependency.
-
-### Networks
-
-| Network | Token | Wallet | REST x402 | MCP |
-|---------|-------|--------|-----------|-----|
-| Base (`eip155:8453`) | USDC | `0xdE7eb...C95E` | Yes | Yes |
-| Arbitrum (`eip155:42161`) | USDC | `0xdE7eb...C95E` | Well-known only | Yes |
-| Optimism (`eip155:10`) | USDC | `0xdE7eb...C95E` | Well-known only | Yes |
-| Tron (`tron:0x2b6653dc`) | USDT | `TADavZEH...P9wMw` | Well-known only | Yes |
-
-Same EVM wallet address works on all EVM chains. Only Base is registered in `register_exact_evm_server` (Dexter limitation for other chains).
+**Critical limitation**: Sovereign Mode = invisible to Agentic.market (Coinbase Bazaar). Bazaar auto-indexes only CDP Facilitator services (GitHub issue x402-foundation/x402#2112).
 
 ### Key files
 
 | File | Role |
 |------|------|
-| `app/main.py` | CORS + middleware chain + routers + MCP mount + dashboard (`GET /`) + health |
-| `app/x402_setup.py` | x402 config: 16 routes, prices, networks, Bazaar discovery, API key bypass, `X-Payment-Help`, attempt counter |
-| `app/mcp_server.py` | FastMCP: 16 tools, verify+settle, upto logic, replay guard, credits, `TransportSecuritySettings` for domain access |
-| `app/facilitator.py` | `DirectFacilitator` (EVM on-chain verification) + `TronFacilitator` (TRC-20 via TronGrid) |
-| `app/well_known.py` | `/.well-known/x402` + `/.well-known/openapi.json` (16 endpoints, x402 extensions, MCP section) |
-| `app/services/deepseek.py` | AsyncOpenAI → DeepSeek, 3x retries, json_mode, returns `(text, tokens)` + streaming |
-| `app/services/replay_guard.py` | SHA-256 payment fingerprint with 10-min TTL |
-| `app/services/credits.py` | API key system: create, top-up, spend, balance + bulk bonuses (10%/20%/30%) |
-| `app/services/analytics.py` | Call stats: tool, payment_method, revenue (JSON, 10K entries, 30 days) + in-memory attempt counter |
+| `app/main.py` | FastAPI app: CORS + 4 middleware + 10 routers + MCP mount + `/` dashboard + `/health` + `/health/deep` + `/health/metrics` + DeepSeekError 503 handler |
+| `app/x402_setup.py` | x402 route configs (16 services), upto/exact pricing, `validate_min_price()` (rejects before AI), `settle_actual_usage()` (3 retries), feature flag `X402_ENABLED`, Bazaar discovery extension |
+| `app/mcp_server.py` | FastMCP: 16 tools with replay guard + upto settlement |
+| `app/facilitator.py` | `DirectFacilitator` (EVM on-chain) + `TronFacilitator` (TRC-20 via TronGrid) |
+| `app/well_known.py` | 5 discovery endpoints: `/.well-known/x402`, `/openapi.json`, `/agent-card.json`, `/glama.json`, `/mcp/server-card.json` |
+| `app/services/deepseek.py` | AsyncOpenAI → DeepSeek, 3x retries (1s/2s/4s), `DeepSeekError` on total failure, streaming support |
+| `app/services/replay_guard.py` | SQLite-backed payment deduplication (30-min TTL, 100K entries, WAL mode). Survives restarts. |
+| `app/services/credits.py` | API key CRUD + credit management. JSON file at `/opt/agent-api/data/credits.json`. 1 credit = $0.001 |
+| `app/services/analytics.py` | Call tracking: tool, payment_method, revenue, tokens. JSON file + in-memory counters. |
 | `app/services/rate_limiter.py` | In-memory: 10 req/min/IP, max 500 IPs |
-| `app/config.py` | Pydantic Settings from `.env` |
-| `app/models.py` | Pydantic request models + `ServiceResponse` |
-| `app/routes/billing.py` | `/billing/create-key`, `/balance`, `/top-up`, `/stats`, `/analytics`, `/tiers` |
-| `app/routes/micro.py` | 10 routes: 6 micro-tasks + translate + nl-to-sql + sql-to-nl + git-summarize |
-| `app/routes/stream.py` | SSE streaming for 5 AI services |
-| `scripts/deploy.py` | SFTP deploy (19 files) + systemctl restart + log check |
-| `scripts/simple_pay.py` | USDC payment via web3 + API call for Bazaar indexing |
+| `app/config.py` | Pydantic Settings from `.env`: DeepSeek key/URL, pay_to addresses, `testnet`, `x402_enabled` |
+| `app/models.py` | Pydantic request models with `Field(max_length=...)` on all strings (protects DeepSeek budget) |
+| `app/routes/billing.py` | `/billing/*` — create-key, balance, top-up, stats, analytics, tiers |
+| `app/routes/micro.py` | 10 routes: 6 micro-tasks (exact pricing) + 4 SQL/dev tools (upto pricing). All with minPrice check. |
+| `app/routes/audit.py` | Upto route with BASE_MICROUNITS + per-token pricing + minPrice check |
+| `app/routes/refactor.py`, `docs.py`, `defi.py`, `trading.py`, `solidity_scan.py` | Upto routes, same pattern |
+| `app/routes/stream.py` | SSE streaming: `POST /api/stream/{tool}` for 5 AI services |
+| `scripts/deploy.py` | SFTP deploy (paramiko) + systemctl restart |
+| `scripts/who_visited.sh` | Visitor audit: access log, unique IPs, MCP connections, user agents, API key usage |
 
-### API keys and credits
+### Networks & Wallet
 
-- Format: `ak-` + 32 hex
-- 10 credits = $0.01 (1 credit = $0.001)
-- Human price = x402 × 1.5
-- Min deduction: 1 cent
-- Storage: `/opt/agent-api/data/credits.json`
-- Top-up: `POST /billing/top-up?key=...&amount_cents=...`
+| Network | Asset | Contract | Wallet |
+|---------|-------|----------|--------|
+| Base (eip155:8453) | USDC | `0x833589fC...` | `0xdE7eb04faE758055642f67f30D246CcB7136C95E` |
+| Arbitrum (eip155:42161) | USDC | `0xaf88d065...` | Same |
+| Optimism (eip155:10) | USDC | `0x0b2C639c...` | Same |
+| Tron (tron:0x2b6653dc) | USDT | `TR7NHqje...` | `TADavZEHddjYMQcL2cnaFadFVKAUmP9wMw` |
 
-### Pricing (ultra-low, May 2026)
+### Pricing (May 2026)
 
-AI services (upto — base→max): audit $0.01–0.05, refactor $0.01–0.05, docs $0.005–0.03, defi $0.01–0.04, trading $0.005–0.03, solidity-scan $0.02–0.08, nl-to-sql $0.005–0.03, sql-to-nl $0.005–0.02, git-summarize $0.005–0.02, translate-code $0.01–0.05.
+**Upto** (pay per actual tokens, base→max):
+audit $0.01–0.05, refactor $0.01–0.05, docs $0.005–0.03, defi $0.01–0.04, trading $0.005–0.03, solidity-scan $0.02–0.08, nl-to-sql $0.005–0.03, sql-to-nl $0.005–0.02, git-summarize $0.005–0.02, translate-code $0.01–0.05.
 
-Micro-tasks (exact): validate-json $0.0005, classify-text $0.001, extract-data $0.005, generate-regex $0.002, format-data $0.003, summarize $0.002.
+**Exact** (flat fee):
+validate-json $0.0005, classify-text $0.001, extract-data $0.005, generate-regex $0.002, format-data $0.003, summarize $0.002.
 
-Token rate: $0.003/1K tokens (DeepSeek cost ~$0.0014/1K, ~2x margin).
+Token rate: $0.003/1K tokens (DeepSeek cost ~$0.0014/1K, ~2x margin). API key multiplier: 1.5x.
 
-## DuckDNS domain
+### Marketplaces
 
-- URL: `agent-api-ai.duckdns.org`
-- Auto-update cron every 5 min: `curl https://www.duckdns.org/update?domains=agent-api-ai&token=...`
-- MCP SSE requires `TransportSecuritySettings(enable_dns_rebinding_protection=False)` for domain access
+| Marketplace | Status | URL |
+|-------------|--------|-----|
+| mcp.so | Listed | `https://mcp.so` |
+| Smithery.ai | Listed (16 tools) | `https://smithery.ai` |
+| Glama.ai | Connector added | `https://glama.ai/mcp` |
+| x402scan.com | `.well-known/x402` indexed, POST-only blocked | `https://x402scan.com` |
+| Agentic.market | Blocked (Sovereign Mode, needs CDP) | `https://agentic.market` |
+
+## DuckDNS
+
+Domain `agent-api-ai.duckdns.org` resolves to `77.239.107.30`. Cron auto-update every 5 min at `/etc/cron.d/duckdns`. Token in cron file.
+
+Some ISPs (Russian) fail to resolve DuckDNS domains. Public DNS (8.8.8.8, 1.1.1.1) works fine. Workaround: `curl --resolve agent-api-ai.duckdns.org:443:77.239.107.30 https://...`
+
+## HTTPS
+
+Nginx reverse proxy on ports 80→443. Let's Encrypt cert at `/etc/letsencrypt/live/agent-api-ai.duckdns.org/`. Auto-renewal via certbot.timer. Config at `/etc/nginx/sites-available/agent-api`.
+
+Self-signed backup cert at `/etc/nginx/ssl/agent-api.crt` (expires Aug 2026).
+
+## Production safety features
+
+- **max_length** on all input fields (50KB code, 10KB context) — prevents budget drain
+- **DeepSeekError → 503** with Retry-After: 30 header (not 500)
+- **Charge AFTER success** — credits/x402 settled only after valid AI response, never on failure
+- **minPrice check** — `validate_min_price()` called BEFORE DeepSeek in all upto routes; authorized amount < minimum → 402 without wasting tokens
+- **ReplayGuard** — SQLite `fingerprints` table, 30-min TTL, survives restart
+- **Facilitator retry** — `settle_actual_usage` retries 3x with 1s/2s backoff
+- **Feature flag** — `X402_ENABLED=false` in `.env` disables payment wall, adds `X-X402-Bypassed: true` header
+- **Rate limit** — 10 req/min/IP via in-memory tracker
 
 ## Deploy
 
-VPS: `77.239.107.30`, root. Password in `scripts/deploy.py`.
-- systemd: `agent-api` (auto-start, `systemctl restart agent-api`)
-- Port 8000 open (ufw)
-- SFTP via paramiko: `python scripts/deploy.py`
-- Logs: `journalctl -u agent-api --no-pager -n 50`
-- Data: `/opt/agent-api/data/` (credits.json, analytics.json)
-- DuckDNS cron: `/etc/cron.d/duckdns`
-
-## Known issues
-
-1. **No HTTPS** — plain HTTP. Need Nginx + Let's Encrypt for production (required for mcp.so registration).
-2. **No Stripe** — credits work but top-up is manual (`/billing/top-up`).
-3. **mcp.so rejected** — requires HTTPS URL, DuckDNS + port 8000 not accepted.
-4. **x402scan GET probes** — endpoints are POST-only, return 405 on GET. x402scan skips POST-only endpoints. Well-known manifest lists correct methods.
-5. **Arbitrum/Optimism not in REST x402** — Dexter doesn't support them for `register_exact_evm_server`. Listed in well-known manifest only.
+- systemd: `agent-api` service, auto-start
+- UFW: ports 22, 80, 443 open (8000 not exposed directly — all traffic through Nginx)
+- Data: `/opt/agent-api/data/` (credits.json, analytics.json, replay.db)
+- Logs: `/opt/agent-api/logs/app.log` (RotatingFileHandler, 10MB × 5 backups)
+- Nginx log: `/var/log/nginx/access.log`
+- SFTP deploy via paramiko: `python scripts/deploy.py`

@@ -1,9 +1,13 @@
 """Audit route — OWASP Top 10 + SWC Registry security scan."""
 from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
 from app.models import AuditRequest, ServiceResponse
 from app.services.deepseek import deepseek_completion
 from app.services import credits, analytics
 from app.prompts.audit import AUDIT_SYSTEM_PROMPT
+from app.x402_setup import settle_actual_usage, validate_min_price
+
+MIN_PRICE_MICROUNITS = 10_000
 
 router = APIRouter()
 
@@ -27,6 +31,11 @@ def _get_tx(request: Request) -> str:
 
 @router.post("/api/audit")
 async def audit_endpoint(request: Request, body: AuditRequest):
+    ok, err = validate_min_price(request, MIN_PRICE_MICROUNITS)
+    if not ok:
+        return JSONResponse(status_code=402, content=err,
+            headers={"PAYMENT-REQUIRED": "true"})
+
     result, tokens = await deepseek_completion(AUDIT_SYSTEM_PROMPT, body.code, body.context, json_mode=True)
     is_api_key = hasattr(request.state, "human_api_key")
     microunits = BASE_MICROUNITS + int((tokens / 1000) * 3000)
@@ -36,6 +45,7 @@ async def audit_endpoint(request: Request, body: AuditRequest):
         credits.spend_credits(request.state.human_api_key, cost_cents)
         analytics.track("audit", "api_key", True, tokens, cost_cents / 100)
     else:
+        await settle_actual_usage(request, microunits)
         analytics.track("audit", "x402", True, tokens, microunits / 1e6)
 
     return ServiceResponse(result=result, payment_network=_get_network(request), payment_tx=_get_tx(request))
