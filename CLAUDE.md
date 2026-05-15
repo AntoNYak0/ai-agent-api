@@ -126,6 +126,7 @@ Token rate: $0.003/1K tokens (DeepSeek cost ~$0.0014/1K, ~2x margin). API key mu
 | Smithery.ai | Listed (16 tools) | `https://smithery.ai` |
 | Glama.ai | Connector added | `https://glama.ai/mcp` |
 | x402scan.com | `.well-known/x402` indexed, POST-only blocked | `https://x402scan.com` |
+| AgenticTrade | 16 services active | `https://agentictrade.io` |
 | Agentic.market | Blocked (Sovereign Mode, needs CDP) | `https://agentic.market` |
 
 ## DuckDNS
@@ -149,6 +150,7 @@ Self-signed backup cert at `/etc/nginx/ssl/agent-api.crt` (expires Aug 2026).
 - **ReplayGuard** — SQLite `fingerprints` table, 30-min TTL, survives restart
 - **Facilitator retry** — `settle_actual_usage` retries 3x with 1s/2s backoff
 - **Feature flag** — `X402_ENABLED=false` in `.env` disables payment wall, adds `X-X402-Bypassed: true` header
+- **Free trial** — `validate-json` endpoint bypasses x402 middleware (no payment required). x402 middleware has explicit skip for `/api/validate-json`.
 - **Rate limit** — 10 req/min/IP via in-memory tracker
 
 ## Deploy
