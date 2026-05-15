@@ -1,4 +1,5 @@
 .env
+scripts/.env
 __pycache__/
 *.pyc
 .venv/
@@ -6,3 +7,4 @@ venv/
 *.egg-info/
 dist/
 .pytest_cache/
+headers.txt

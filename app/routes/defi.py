@@ -1,9 +1,9 @@
-"""Audit route — OWASP Top 10 + SWC Registry security scan."""
+"""DeFi analysis route — protocol risks, tokenomics, architecture."""
 from fastapi import APIRouter, Request
-from app.models import AuditRequest, ServiceResponse
+from app.models import DefiAnalyzeRequest, ServiceResponse
 from app.services.deepseek import deepseek_completion
 from app.services import credits, analytics
-from app.prompts.audit import AUDIT_SYSTEM_PROMPT
+from app.prompts.defi import DEFI_SYSTEM_PROMPT
 
 router = APIRouter()
 
@@ -25,17 +25,18 @@ def _get_tx(request: Request) -> str:
         return "unknown"
 
 
-@router.post("/api/audit")
-async def audit_endpoint(request: Request, body: AuditRequest):
-    result, tokens = await deepseek_completion(AUDIT_SYSTEM_PROMPT, body.code, body.context, json_mode=True)
+@router.post("/api/defi-analyze")
+async def defi_analyze_endpoint(request: Request, body: DefiAnalyzeRequest):
+    user_content = f"Protocol: {body.protocol}\nBlockchain: {body.chain}"
+    if body.details:
+        user_content += f"\n\nDetails: {body.details}"
+    result, tokens = await deepseek_completion(DEFI_SYSTEM_PROMPT, user_content, json_mode=True)
     is_api_key = hasattr(request.state, "human_api_key")
     microunits = BASE_MICROUNITS + int((tokens / 1000) * 3000)
-
     if is_api_key:
         cost_cents = max(1, round((microunits / 10000) * CREDIT_MULTIPLIER))
         credits.spend_credits(request.state.human_api_key, cost_cents)
-        analytics.track("audit", "api_key", True, tokens, cost_cents / 100)
+        analytics.track("defi", "api_key", True, tokens, cost_cents / 100)
     else:
-        analytics.track("audit", "x402", True, tokens, microunits / 1e6)
-
+        analytics.track("defi", "x402", True, tokens, microunits / 1e6)
     return ServiceResponse(result=result, payment_network=_get_network(request), payment_tx=_get_tx(request))

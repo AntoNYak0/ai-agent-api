@@ -1,23 +1,14 @@
+"""Docs route — generate technical documentation."""
 from fastapi import APIRouter, Request
-from app.models import DocsRequest, DocsResponse
+from app.models import DocsRequest, ServiceResponse
 from app.services.deepseek import deepseek_completion
+from app.services import credits, analytics
 from app.prompts.docs import DOCS_SYSTEM_PROMPT
 
 router = APIRouter()
 
-
-@router.post("/api/docs")
-async def docs_endpoint(request: Request, body: DocsRequest):
-    result = await deepseek_completion(
-        system_prompt=DOCS_SYSTEM_PROMPT,
-        user_content=body.code,
-        context_window=body.context,
-    )
-    return DocsResponse(
-        documentation=result,
-        payment_network=_get_network(request),
-        payment_tx=_get_tx(request),
-    )
+CREDIT_MULTIPLIER = 1.5
+BASE_MICROUNITS = 10000
 
 
 def _get_network(request: Request) -> str:
@@ -32,3 +23,17 @@ def _get_tx(request: Request) -> str:
         return request.state.payment_payload.transaction
     except AttributeError:
         return "unknown"
+
+
+@router.post("/api/docs")
+async def docs_endpoint(request: Request, body: DocsRequest):
+    result, tokens = await deepseek_completion(DOCS_SYSTEM_PROMPT, body.code, body.context, json_mode=True)
+    is_api_key = hasattr(request.state, "human_api_key")
+    microunits = BASE_MICROUNITS + int((tokens / 1000) * 3000)
+    if is_api_key:
+        cost_cents = max(1, round((microunits / 10000) * CREDIT_MULTIPLIER))
+        credits.spend_credits(request.state.human_api_key, cost_cents)
+        analytics.track("docs", "api_key", True, tokens, cost_cents / 100)
+    else:
+        analytics.track("docs", "x402", True, tokens, microunits / 1e6)
+    return ServiceResponse(result=result, payment_network=_get_network(request), payment_tx=_get_tx(request))

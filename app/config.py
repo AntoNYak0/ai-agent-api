@@ -9,10 +9,11 @@ class Settings(BaseSettings):
 
     # x402 wallet — public receiving address (no private key needed on server)
     pay_to_address_evm: str
+    pay_to_address_tron: str | None = None
     pay_to_address_solana: str | None = None
 
     # x402 facilitator
-    facilitator_url: str = "https://x402.org/facilitator"
+    facilitator_url: str = "https://x402.dexter.cash"
 
     # App mode
     testnet: bool = True

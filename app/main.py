@@ -25,8 +25,9 @@ app.add_middleware(
 configure_x402(
     app=app,
     pay_to_evm=settings.pay_to_address_evm,
-    pay_to_solana=settings.pay_to_address_solana,
+    pay_to_tron=settings.pay_to_address_tron,
     facilitator_url=settings.facilitator_url,
+    pay_to_solana=settings.pay_to_address_solana,
     testnet=settings.testnet,
 )
 
@@ -49,6 +50,7 @@ app.mount("/mcp", mcp_app.sse_app())
 async def dashboard():
     stats = credits.get_stats()
     analytics_data = analytics.get_stats(1)
+    attempts_data = analytics.get_attempts()
     rl = rate_limiter.get_stats()
     return HTMLResponse(f"""<!DOCTYPE html>
 <html lang="en">
@@ -88,6 +90,7 @@ a {{ color:#58a6ff }}
 <div class="stat"><div class="n">{analytics_data.get('total_calls', 0)}</div><div class="l">Calls</div></div>
 <div class="stat"><div class="n">${analytics_data.get('total_revenue_usd', 0)}</div><div class="l">Revenue</div></div>
 <div class="stat"><div class="n">{analytics_data.get('conversion_rate', 0)}%</div><div class="l">Conversion</div></div>
+<div class="stat"><div class="n">{attempts_data.get('total_attempts', 0)}</div><div class="l">402 Attempts</div></div>
 </div>
 </div>
 <div class="card" style="flex:1">
@@ -102,8 +105,8 @@ a {{ color:#58a6ff }}
 
 <div class="card">
 <h2>Quick Start</h2>
-<code>curl http://77.239.107.30:8000/api/validate-json -H "Content-Type: application/json" -d '{{"data":"{{\\"name\\":\\"test\\"}}"}}'</code>
-<p style="margin-top:8px;color:#8b949e;font-size:12px">No payment → 402 with PAYMENT-REQUIRED header. Send USDC, retry with payment-signature header.</p>
+<code>curl http://agent-api-ai.duckdns.org:8000/api/validate-json -H "Content-Type: application/json" -d '{{"data":"{{\\"name\\":\\"test\\"}}"}}'</code>
+<p style="margin-top:8px;color:#8b949e;font-size:12px">No payment → 402 with PAYMENT-REQUIRED header. MCP: /mcp/sse</p>
 </div>
 
 <div class="card">
@@ -128,11 +131,13 @@ Powered by DeepSeek V4 Pro · Payments via x402 Protocol · {rl['tracked_ips']} 
 @app.get("/health")
 async def health():
     stats = credits.get_stats()
+    attempts = analytics.get_attempts()
     return {
         "status": "ok",
         "testnet": settings.testnet,
         "version": "2.0.0",
         "billing": stats,
+        "payment_attempts": attempts["total_attempts"],
     }
 
 

@@ -1,4 +1,7 @@
+import logging
+
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from x402 import x402ResourceServer
 from x402.http import (
     RouteConfig,
@@ -13,31 +16,33 @@ from x402.mechanisms.evm.exact import register_exact_evm_server
 from x402.http.facilitator_client import HTTPFacilitatorClient, FacilitatorConfig
 from app.facilitator import DirectFacilitator
 
-# Solana mainnet
+logger = logging.getLogger("x402")
+
+# Solana mainnet (reserved for future use)
 SOLANA_NET = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"
 
 # AI services: upto pricing (pay per actual usage)
 _UPTO_SERVICES = {
-    "POST /api/audit":          ("$0.10", "Security scan with OWASP Top 10 + SWC Registry taxonomy"),
-    "POST /api/refactor":       ("$0.16", "Refactor legacy code — DRY, SOLID, modern patterns"),
-    "POST /api/docs":           ("$0.06", "Generate technical docs with architecture, signatures, examples"),
-    "POST /api/defi-analyze":   ("$0.08", "DeFi protocol analysis: risks, tokenomics, architecture"),
-    "POST /api/trading-signal": ("$0.06", "Crypto trading analytics — qualitative, NOT financial advice"),
-    "POST /api/solidity-scan":  ("$0.20", "Solidity vulnerability scanner — 36 SWC checks + DeFi exploits"),
-    "POST /api/nl-to-sql":      ("$0.06", "Convert natural language descriptions to SQL queries"),
-    "POST /api/sql-to-nl":      ("$0.04", "Explain SQL queries in plain English"),
-    "POST /api/git-summarize":  ("$0.04", "Summarize git diff into PR description"),
-    "POST /api/translate-code": ("$0.10", "Translate code between languages (Python, TS, Rust, Go, Solidity)"),
+    "POST /api/audit":          ("$0.05", "Security scan with OWASP Top 10 + SWC Registry taxonomy"),
+    "POST /api/refactor":       ("$0.05", "Refactor legacy code — DRY, SOLID, modern patterns"),
+    "POST /api/docs":           ("$0.03", "Generate technical docs with architecture, signatures, examples"),
+    "POST /api/defi-analyze":   ("$0.04", "DeFi protocol analysis: risks, tokenomics, architecture"),
+    "POST /api/trading-signal": ("$0.03", "Crypto trading analytics — qualitative, NOT financial advice"),
+    "POST /api/solidity-scan":  ("$0.08", "Solidity vulnerability scanner — 36 SWC checks + DeFi exploits"),
+    "POST /api/nl-to-sql":      ("$0.03", "Convert natural language descriptions to SQL queries"),
+    "POST /api/sql-to-nl":      ("$0.02", "Explain SQL queries in plain English"),
+    "POST /api/git-summarize":  ("$0.02", "Summarize git diff into PR description"),
+    "POST /api/translate-code": ("$0.05", "Translate code between languages (Python, TS, Rust, Go, Solidity)"),
 }
 
 # Micro-tasks: exact pricing (flat fee)
 _EXACT_SERVICES = {
-    "POST /api/validate-json":  ("$0.001", "Validate JSON/YAML structure, schema, types"),
-    "POST /api/classify-text":  ("$0.002", "Classify text: sentiment, category, keywords, language"),
-    "POST /api/extract-data":   ("$0.015", "Extract structured data: names, emails, phones, URLs, dates"),
-    "POST /api/generate-regex": ("$0.005", "Generate regex pattern from description with test cases"),
-    "POST /api/format-data":    ("$0.01",  "Convert data: CSV to JSON, JSON to YAML, etc."),
-    "POST /api/summarize":      ("$0.005", "Summarize text to N words, extract key points"),
+    "POST /api/validate-json":  ("$0.0005", "Validate JSON/YAML structure, schema, types"),
+    "POST /api/classify-text":  ("$0.001",  "Classify text: sentiment, category, keywords, language"),
+    "POST /api/extract-data":   ("$0.005",  "Extract structured data: names, emails, phones, URLs, dates"),
+    "POST /api/generate-regex": ("$0.002",  "Generate regex pattern from description with test cases"),
+    "POST /api/format-data":    ("$0.003",  "Convert data: CSV to JSON, JSON to YAML, etc."),
+    "POST /api/summarize":      ("$0.002",  "Summarize text to N words, extract key points"),
 }
 
 # Input schemas for Bazaar discovery
@@ -64,24 +69,27 @@ _SCHEMAS = {
 def configure_x402(
     app: FastAPI,
     pay_to_evm: str,
-    pay_to_solana: str | None,
+    pay_to_tron: str | None,
     facilitator_url: str,
+    pay_to_solana: str | None = None,
     testnet: bool = True,
 ) -> None:
     if testnet:
         facilitator = DirectFacilitator(testnet=True, pay_to=pay_to_evm)
+        logger.info("x402: using DirectFacilitator (testnet mode)")
     else:
         facilitator = DirectFacilitator(testnet=False, pay_to=pay_to_evm)
+        logger.info("x402: using DirectFacilitator (mainnet — onchain RPC verification)")
     server = x402ResourceServer(facilitator)
 
     base_net = "eip155:84532" if testnet else "eip155:8453"
-    polygon_net = "eip155:137"
-    register_exact_evm_server(server, [base_net, polygon_net])
+    # Only register networks that the facilitator (Dexter) supports for exact EVM scheme
+    evm_networks = [base_net]
+    register_exact_evm_server(server, evm_networks)
 
-    # Networks: Base + Polygon for production (Solana in well-known only)
-    common_networks = [base_net]
-    if not testnet:
-        common_networks.append(polygon_net)
+    # REST x402 middleware only advertises Base (what Dexter verifies)
+    # Arbitrum/Optimism/Tron are listed in well-known manifest + handled via MCP
+    common_networks = list(evm_networks)
 
     def make_option(network: str, price: str) -> PaymentOption:
         return PaymentOption(
@@ -120,17 +128,17 @@ def configure_x402(
         )
 
     paywall = PaywallConfig(
-        app_name="AI Agent API — 16 pay-per-call services ($0.001–$0.10 USDC)",
+        app_name="AI Agent API — 16 pay-per-call services ($0.0005–$0.08 USDC)",
     )
 
-    from app.services import credits
+    from app.services import credits, analytics
 
     x402_mw = payment_middleware(routes, server, paywall_config=paywall)
 
     PAYMENT_HELP = (
-        "To use this API, send USDC to {pay_to} on Base or Polygon, "
+        "To use this API, send USDC to {pay_to} on Base, "
         "then retry with header payment-signature: <base64-json>. "
-        "Or get a free API key: POST /billing/create-key. "
+        "MCP: http://agent-api-ai.duckdns.org:8000/mcp/sse "
         "Docs: https://github.com/AntoNYak0/ai-agent-api"
     ).format(pay_to=pay_to_evm)
 
@@ -140,24 +148,26 @@ def configure_x402(
         if hasattr(request.state, "human_api_key"):
             return await call_next(request)
 
-        from starlette.responses import Response as StarletteResponse
-        import json as _json
-
-        response = await x402_mw(request, call_next)
-        if response.status_code == 402:
-            try:
-                body = b""
-                async for chunk in response.body_iterator:
-                    body += chunk
-                data = _json.loads(body) if body else {}
-                data["message"] = PAYMENT_HELP
-                new_body = _json.dumps(data).encode()
-                return StarletteResponse(
-                    content=new_body,
-                    status_code=402,
-                    headers=dict(response.headers),
-                    media_type="application/json",
-                )
-            except Exception:
-                pass
-        return response
+        try:
+            response = await x402_mw(request, call_next)
+            if response.status_code == 402:
+                # Add human-readable help header
+                response.headers["X-Payment-Help"] = PAYMENT_HELP.replace("\n", " ")
+                logger.info("402 Payment Required: %s %s", request.method, request.url.path)
+                analytics.increment_attempt(request.url.path)
+            return response
+        except Exception as e:
+            logger.error("x402 middleware error: %s: %s", type(e).__name__, e)
+            return JSONResponse(
+                status_code=402,
+                content={
+                    "x402Version": 2,
+                    "error": "Payment required",
+                    "message": "x402 payment processing error — retry with payment-signature header",
+                    "detail": str(e) if str(e) else "unknown error",
+                },
+                headers={
+                    "PAYMENT-REQUIRED": "true",
+                    "X-Payment-Help": PAYMENT_HELP.replace("\n", " "),
+                },
+            )

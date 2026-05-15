@@ -1,0 +1,140 @@
+"""Micro-task routes — high-frequency, low-cost AI services + SQL/dev tools."""
+from fastapi import APIRouter, Request
+from app.models import (
+    ValidateJsonRequest, ClassifyTextRequest, ExtractDataRequest,
+    TranslateCodeRequest, GenerateRegexRequest, FormatDataRequest,
+    SummarizeRequest, NlToSqlRequest, SqlToNlRequest, GitSummarizeRequest,
+    ServiceResponse,
+)
+from app.services.deepseek import deepseek_completion
+from app.services import credits, analytics
+from app.prompts.micro import (
+    VALIDATE_JSON_PROMPT, CLASSIFY_TEXT_PROMPT, EXTRACT_DATA_PROMPT,
+    TRANSLATE_CODE_PROMPT, GENERATE_REGEX_PROMPT, FORMAT_DATA_PROMPT,
+    SUMMARIZE_PROMPT, NL_TO_SQL_PROMPT, SQL_TO_NL_PROMPT, GIT_SUMMARIZE_PROMPT,
+)
+
+router = APIRouter()
+
+# Credit prices in microunits (with 1.5x human multiplier)
+_CREDIT_PRICES = {
+    "validate-json": 1000, "classify-text": 2000, "extract-data": 15000,
+    "generate-regex": 5000, "format-data": 10000, "summarize": 5000,
+    "nl-to-sql": 10000, "sql-to-nl": 10000, "git-summarize": 10000,
+    "translate-code": 20000,
+}
+_CREDIT_MULTIPLIER = 1.5
+
+
+def _get_network(request: Request) -> str:
+    try:
+        return request.state.payment_requirements.network
+    except AttributeError:
+        return "unknown"
+
+
+def _get_tx(request: Request) -> str:
+    try:
+        return request.state.payment_payload.transaction
+    except AttributeError:
+        return "unknown"
+
+
+def _deduct_and_track(request: Request, service: str, tokens_used: int = 0):
+    """Deduct credits for API key users and track the call."""
+    is_api_key = hasattr(request.state, "human_api_key")
+    microunits = _CREDIT_PRICES.get(service, 10000)
+    if tokens_used:
+        microunits += int((tokens_used / 1000) * 3000)
+
+    if is_api_key:
+        cost_cents = max(1, round((microunits / 10000) * _CREDIT_MULTIPLIER))
+        credits.spend_credits(request.state.human_api_key, cost_cents)
+        amount_usd = cost_cents / 100
+        method = "api_key"
+    else:
+        amount_usd = microunits / 1e6
+        method = "x402"
+
+    analytics.track(service, method, True, tokens_used, amount_usd)
+
+
+
+
+# ── Micro-tasks ─────────────────────────────────────────────────
+
+@router.post("/api/validate-json")
+async def validate_json(request: Request, body: ValidateJsonRequest):
+    content = f"Target schema:\n{body.target_schema}\n\nData:\n{body.data}" if body.target_schema else body.data
+    result, _ = await deepseek_completion(VALIDATE_JSON_PROMPT, content, json_mode=True)
+    _deduct_and_track(request, "validate-json")
+    return ServiceResponse(result=result, payment_network=_get_network(request), payment_tx=_get_tx(request))
+
+
+@router.post("/api/classify-text")
+async def classify_text(request: Request, body: ClassifyTextRequest):
+    content = f"Categories hint: {body.categories or 'auto-detect'}\n\nText:\n{body.text}"
+    result, _ = await deepseek_completion(CLASSIFY_TEXT_PROMPT, content, json_mode=True)
+    _deduct_and_track(request, "classify-text")
+    return ServiceResponse(result=result, payment_network=_get_network(request), payment_tx=_get_tx(request))
+
+
+@router.post("/api/extract-data")
+async def extract_data(request: Request, body: ExtractDataRequest):
+    result, _ = await deepseek_completion(EXTRACT_DATA_PROMPT, body.text, json_mode=True)
+    _deduct_and_track(request, "extract-data")
+    return ServiceResponse(result=result, payment_network=_get_network(request), payment_tx=_get_tx(request))
+
+
+@router.post("/api/translate-code")
+async def translate_code(request: Request, body: TranslateCodeRequest):
+    prompt = TRANSLATE_CODE_PROMPT.format(source_lang=body.source_lang, target_lang=body.target_lang)
+    result, tokens = await deepseek_completion(prompt, body.code, json_mode=True)
+    _deduct_and_track(request, "translate-code", tokens)
+    return ServiceResponse(result=result, payment_network=_get_network(request), payment_tx=_get_tx(request))
+
+
+@router.post("/api/generate-regex")
+async def generate_regex(request: Request, body: GenerateRegexRequest):
+    result, _ = await deepseek_completion(GENERATE_REGEX_PROMPT, body.description, json_mode=True)
+    _deduct_and_track(request, "generate-regex")
+    return ServiceResponse(result=result, payment_network=_get_network(request), payment_tx=_get_tx(request))
+
+
+@router.post("/api/format-data")
+async def format_data(request: Request, body: FormatDataRequest):
+    prompt = FORMAT_DATA_PROMPT.format(source_format=body.source_format, target_format=body.target_format)
+    result, _ = await deepseek_completion(prompt, body.data, json_mode=True)
+    _deduct_and_track(request, "format-data")
+    return ServiceResponse(result=result, payment_network=_get_network(request), payment_tx=_get_tx(request))
+
+
+@router.post("/api/summarize")
+async def summarize(request: Request, body: SummarizeRequest):
+    prompt = SUMMARIZE_PROMPT.format(max_length=body.max_length)
+    result, _ = await deepseek_completion(prompt, body.text, json_mode=True)
+    _deduct_and_track(request, "summarize")
+    return ServiceResponse(result=result, payment_network=_get_network(request), payment_tx=_get_tx(request))
+
+
+# ── SQL / Dev tools ────────────────────────────────────────────
+
+@router.post("/api/nl-to-sql")
+async def nl_to_sql(request: Request, body: NlToSqlRequest):
+    result, tokens = await deepseek_completion(NL_TO_SQL_PROMPT, body.query, json_mode=True)
+    _deduct_and_track(request, "nl-to-sql", tokens)
+    return ServiceResponse(result=result, payment_network=_get_network(request), payment_tx=_get_tx(request))
+
+
+@router.post("/api/sql-to-nl")
+async def sql_to_nl(request: Request, body: SqlToNlRequest):
+    result, tokens = await deepseek_completion(SQL_TO_NL_PROMPT, body.sql, json_mode=True)
+    _deduct_and_track(request, "sql-to-nl", tokens)
+    return ServiceResponse(result=result, payment_network=_get_network(request), payment_tx=_get_tx(request))
+
+
+@router.post("/api/git-summarize")
+async def git_summarize(request: Request, body: GitSummarizeRequest):
+    result, tokens = await deepseek_completion(GIT_SUMMARIZE_PROMPT, body.diff, json_mode=True)
+    _deduct_and_track(request, "git-summarize", tokens)
+    return ServiceResponse(result=result, payment_network=_get_network(request), payment_tx=_get_tx(request))
