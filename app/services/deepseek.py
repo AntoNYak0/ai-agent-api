@@ -1,17 +1,25 @@
+import asyncio
+import logging
 from openai import AsyncOpenAI
 from app.config import settings
+
+logger = logging.getLogger("deepseek")
 
 client = AsyncOpenAI(
     base_url=settings.deepseek_base_url,
     api_key=settings.deepseek_api_key,
 )
 
+MAX_RETRIES = 3
+RETRY_DELAYS = [1.0, 2.0, 4.0]
+
 
 async def deepseek_completion(
     system_prompt: str,
     user_content: str,
     context_window: str | None = None,
-) -> str:
+    json_mode: bool = False,
+) -> tuple[str, int]:
     messages = [{"role": "system", "content": system_prompt}]
 
     if context_window:
@@ -19,9 +27,71 @@ async def deepseek_completion(
 
     messages.append({"role": "user", "content": user_content})
 
-    response = await client.chat.completions.create(
-        model=settings.deepseek_model,
-        messages=messages,
-        max_tokens=8192,
-    )
-    return response.choices[0].message.content
+    kwargs = {
+        "model": settings.deepseek_model,
+        "messages": messages,
+        "max_tokens": 8192,
+    }
+    if json_mode:
+        kwargs["response_format"] = {"type": "json_object"}
+
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = await client.chat.completions.create(**kwargs)
+            text = response.choices[0].message.content
+            tokens = response.usage.total_tokens if response.usage else 0
+            return text, tokens
+        except Exception as e:
+            if attempt < MAX_RETRIES - 1:
+                delay = RETRY_DELAYS[attempt]
+                logger.warning(
+                    f"DeepSeek attempt {attempt + 1} failed: {e}. Retrying in {delay}s..."
+                )
+                await asyncio.sleep(delay)
+            else:
+                logger.error(f"DeepSeek failed after {MAX_RETRIES} attempts: {e}")
+                raise
+
+
+async def deepseek_completion_stream(
+    system_prompt: str,
+    user_content: str,
+    context_window: str | None = None,
+    json_mode: bool = False,
+):
+    """Stream DeepSeek response chunk by chunk. Yields text fragments."""
+    import warnings
+    messages = [{"role": "system", "content": system_prompt}]
+
+    if context_window:
+        messages.append({"role": "user", "content": context_window})
+
+    messages.append({"role": "user", "content": user_content})
+
+    kwargs = {
+        "model": settings.deepseek_model,
+        "messages": messages,
+        "max_tokens": 8192,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+    if json_mode:
+        kwargs["response_format"] = {"type": "json_object"}
+
+    for attempt in range(MAX_RETRIES):
+        try:
+            stream = await client.chat.completions.create(**kwargs)
+            async for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    yield chunk.choices[0].delta.content
+            return
+        except Exception as e:
+            if attempt < MAX_RETRIES - 1:
+                delay = RETRY_DELAYS[attempt]
+                logger.warning(
+                    f"DeepSeek stream attempt {attempt + 1} failed: {e}. Retrying in {delay}s..."
+                )
+                await asyncio.sleep(delay)
+            else:
+                logger.error(f"DeepSeek stream failed after {MAX_RETRIES} attempts: {e}")
+                raise

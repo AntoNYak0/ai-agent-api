@@ -19,6 +19,22 @@ curl -X POST http://77.239.107.30:8000/api/validate-json \
 # → HTTP 402 + PAYMENT-REQUIRED header with price and payment details
 ```
 
+### Python Client
+
+```bash
+# Interactive — guides you through payment setup
+python examples/client.py
+
+# With API key (human developers)
+python examples/client.py --key ak-YOUR_KEY --service audit --data "your code here"
+
+# With x402 transaction (AI agents)
+python examples/client.py --tx 0xYOUR_TX_HASH
+```
+
+See [examples/client.py](examples/client.py) for full source.
+```
+
 ## 16 Services
 
 ### AI Services (upto pricing — pay for actual usage)
