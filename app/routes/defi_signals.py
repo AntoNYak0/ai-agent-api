@@ -49,7 +49,9 @@ async def whale_tracker(request: Request, body: WhaleTrackerRequest):
     microunits = WHALE_BASE + int((tokens / 1000) * 3000)
     if is_api_key:
         cost_cents = max(1, round((microunits / 10000) * CREDIT_MULTIPLIER))
-        credits.spend_credits(request.state.human_api_key, cost_cents)
+        ok = credits.spend_credits(request.state.human_api_key, cost_cents)
+        if not ok:
+            return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
         analytics.track("whale-tracker", "api_key", True, tokens, cost_cents / 100)
     else:
         await settle_actual_usage(request, microunits)
@@ -71,7 +73,9 @@ async def smart_money(request: Request, body: SmartMoneyRequest):
     microunits = SMART_BASE + int((tokens / 1000) * 3000)
     if is_api_key:
         cost_cents = max(1, round((microunits / 10000) * CREDIT_MULTIPLIER))
-        credits.spend_credits(request.state.human_api_key, cost_cents)
+        ok = credits.spend_credits(request.state.human_api_key, cost_cents)
+        if not ok:
+            return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
         analytics.track("smart-money", "api_key", True, tokens, cost_cents / 100)
     else:
         await settle_actual_usage(request, microunits)
@@ -93,7 +97,9 @@ async def price_feed(request: Request, body: PriceFeedRequest):
     microunits = PRICE_BASE + int((tokens / 1000) * 3000)
     if is_api_key:
         cost_cents = max(1, round((microunits / 10000) * CREDIT_MULTIPLIER))
-        credits.spend_credits(request.state.human_api_key, cost_cents)
+        ok = credits.spend_credits(request.state.human_api_key, cost_cents)
+        if not ok:
+            return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
         analytics.track("price-feed", "api_key", True, tokens, cost_cents / 100)
     else:
         await settle_actual_usage(request, microunits)

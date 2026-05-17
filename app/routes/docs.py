@@ -29,7 +29,9 @@ async def docs_endpoint(request: Request, body: DocsRequest):
     microunits = BASE_MICROUNITS + int((tokens / 1000) * 3000)
     if is_api_key:
         cost_cents = max(1, round((microunits / 10000) * CREDIT_MULTIPLIER))
-        credits.spend_credits(request.state.human_api_key, cost_cents)
+        ok = credits.spend_credits(request.state.human_api_key, cost_cents)
+        if not ok:
+            return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
         analytics.track("docs", "api_key", True, tokens, cost_cents / 100)
     else:
         await settle_actual_usage(request, microunits)

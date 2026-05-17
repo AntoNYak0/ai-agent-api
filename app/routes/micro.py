@@ -30,8 +30,9 @@ _CREDIT_PRICES = {
 _CREDIT_MULTIPLIER = 1.5
 
 
-async def _deduct_and_track(request: Request, service: str, tokens_used: int = 0):
-    """Deduct credits for API key users, settle for x402, and track the call."""
+async def _deduct_and_track(request: Request, service: str, tokens_used: int = 0) -> bool:
+    """Deduct credits for API key users, settle for x402, and track the call.
+    Returns True if payment succeeded, False if insufficient credits."""
     is_api_key = hasattr(request.state, "human_api_key")
     microunits = _CREDIT_PRICES.get(service, 10000)
     if tokens_used:
@@ -39,7 +40,9 @@ async def _deduct_and_track(request: Request, service: str, tokens_used: int = 0
 
     if is_api_key:
         cost_cents = max(1, round((microunits / 10000) * _CREDIT_MULTIPLIER))
-        credits.spend_credits(request.state.human_api_key, cost_cents)
+        if not credits.spend_credits(request.state.human_api_key, cost_cents):
+            analytics.track(service, "api_key", False, tokens_used, 0)
+            return False
         amount_usd = cost_cents / 100
         method = "api_key"
     else:
@@ -48,6 +51,7 @@ async def _deduct_and_track(request: Request, service: str, tokens_used: int = 0
         method = "x402"
 
     analytics.track(service, method, True, tokens_used, amount_usd)
+    return True
 
 
 
@@ -58,7 +62,9 @@ async def _deduct_and_track(request: Request, service: str, tokens_used: int = 0
 async def validate_json(request: Request, body: ValidateJsonRequest):
     content = f"Target schema:\n{body.target_schema}\n\nData:\n{body.data}" if body.target_schema else body.data
     result, _ = await deepseek_completion(VALIDATE_JSON_PROMPT, content, json_mode=True)
-    await _deduct_and_track(request, "validate-json")
+    ok = await _deduct_and_track(request, "validate-json")
+    if not ok:
+        return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
     return ServiceResponse(result=result, payment_network=get_network(request), payment_tx=get_tx(request))
 
 
@@ -66,14 +72,18 @@ async def validate_json(request: Request, body: ValidateJsonRequest):
 async def classify_text(request: Request, body: ClassifyTextRequest):
     content = f"Categories hint: {body.categories or 'auto-detect'}\n\nText:\n{body.text}"
     result, _ = await deepseek_completion(CLASSIFY_TEXT_PROMPT, content, json_mode=True)
-    await _deduct_and_track(request, "classify-text")
+    ok = await _deduct_and_track(request, "classify-text")
+    if not ok:
+        return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
     return ServiceResponse(result=result, payment_network=get_network(request), payment_tx=get_tx(request))
 
 
 @router.post("/api/extract-data")
 async def extract_data(request: Request, body: ExtractDataRequest):
     result, _ = await deepseek_completion(EXTRACT_DATA_PROMPT, body.text, json_mode=True)
-    await _deduct_and_track(request, "extract-data")
+    ok = await _deduct_and_track(request, "extract-data")
+    if not ok:
+        return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
     return ServiceResponse(result=result, payment_network=get_network(request), payment_tx=get_tx(request))
 
 
@@ -85,14 +95,18 @@ async def translate_code(request: Request, body: TranslateCodeRequest):
             headers={"PAYMENT-REQUIRED": "true"})
     prompt = TRANSLATE_CODE_PROMPT.format(source_lang=body.source_lang, target_lang=body.target_lang)
     result, tokens = await cached_completion("translate-code", body.code, prompt, None, json_mode=True)
-    await _deduct_and_track(request, "translate-code", tokens)
+    ok = await _deduct_and_track(request, "translate-code", tokens)
+    if not ok:
+        return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
     return ServiceResponse(result=result, payment_network=get_network(request), payment_tx=get_tx(request))
 
 
 @router.post("/api/generate-regex")
 async def generate_regex(request: Request, body: GenerateRegexRequest):
     result, _ = await deepseek_completion(GENERATE_REGEX_PROMPT, body.description, json_mode=True)
-    await _deduct_and_track(request, "generate-regex")
+    ok = await _deduct_and_track(request, "generate-regex")
+    if not ok:
+        return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
     return ServiceResponse(result=result, payment_network=get_network(request), payment_tx=get_tx(request))
 
 
@@ -100,7 +114,9 @@ async def generate_regex(request: Request, body: GenerateRegexRequest):
 async def format_data(request: Request, body: FormatDataRequest):
     prompt = FORMAT_DATA_PROMPT.format(source_format=body.source_format, target_format=body.target_format)
     result, _ = await deepseek_completion(prompt, body.data, json_mode=True)
-    await _deduct_and_track(request, "format-data")
+    ok = await _deduct_and_track(request, "format-data")
+    if not ok:
+        return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
     return ServiceResponse(result=result, payment_network=get_network(request), payment_tx=get_tx(request))
 
 
@@ -108,7 +124,9 @@ async def format_data(request: Request, body: FormatDataRequest):
 async def summarize(request: Request, body: SummarizeRequest):
     prompt = SUMMARIZE_PROMPT.format(max_length=body.max_length)
     result, _ = await deepseek_completion(prompt, body.text, json_mode=True)
-    await _deduct_and_track(request, "summarize")
+    ok = await _deduct_and_track(request, "summarize")
+    if not ok:
+        return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
     return ServiceResponse(result=result, payment_network=get_network(request), payment_tx=get_tx(request))
 
 
@@ -121,7 +139,9 @@ async def nl_to_sql(request: Request, body: NlToSqlRequest):
         return JSONResponse(status_code=402, content=err,
             headers={"PAYMENT-REQUIRED": "true"})
     result, tokens = await cached_completion("nl-to-sql", body.query, NL_TO_SQL_PROMPT, None, json_mode=True)
-    await _deduct_and_track(request, "nl-to-sql", tokens)
+    ok = await _deduct_and_track(request, "nl-to-sql", tokens)
+    if not ok:
+        return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
     return ServiceResponse(result=result, payment_network=get_network(request), payment_tx=get_tx(request))
 
 
@@ -132,7 +152,9 @@ async def sql_to_nl(request: Request, body: SqlToNlRequest):
         return JSONResponse(status_code=402, content=err,
             headers={"PAYMENT-REQUIRED": "true"})
     result, tokens = await cached_completion("sql-to-nl", body.sql, SQL_TO_NL_PROMPT, None, json_mode=True)
-    await _deduct_and_track(request, "sql-to-nl", tokens)
+    ok = await _deduct_and_track(request, "sql-to-nl", tokens)
+    if not ok:
+        return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
     return ServiceResponse(result=result, payment_network=get_network(request), payment_tx=get_tx(request))
 
 
@@ -143,5 +165,7 @@ async def git_summarize(request: Request, body: GitSummarizeRequest):
         return JSONResponse(status_code=402, content=err,
             headers={"PAYMENT-REQUIRED": "true"})
     result, tokens = await cached_completion("git-summarize", body.diff, GIT_SUMMARIZE_PROMPT, None, json_mode=True)
-    await _deduct_and_track(request, "git-summarize", tokens)
+    ok = await _deduct_and_track(request, "git-summarize", tokens)
+    if not ok:
+        return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
     return ServiceResponse(result=result, payment_network=get_network(request), payment_tx=get_tx(request))

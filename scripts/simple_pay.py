@@ -1,9 +1,12 @@
-"""Платёж + вызов API для Bazaar индексации."""
+"""Payment + API call for Bazaar indexing."""
 
-import sys, json, base64, httpx
+import sys, os, json, base64, httpx
 from web3 import Web3
 
-PRIVATE_KEY = "[REDACTED-COMPROMISED-KEY]"
+PRIVATE_KEY = os.environ.get("PAYER_PRIVATE_KEY", "")
+if not PRIVATE_KEY:
+    print("Set PAYER_PRIVATE_KEY environment variable")
+    sys.exit(1)
 API_URL = "http://77.239.107.30:8000"
 RECEIVER = "0xdE7eb04faE758055642f67f30D246CcB7136C95E"
 USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
