@@ -118,6 +118,17 @@ async def _poll_once() -> int:
             last_blocks = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         last_blocks = {}
+        # First run: start from 1000 blocks ago instead of block 0
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                for network, rpc_url in RPC_URLS.items():
+                    resp = await client.post(rpc_url, json={"jsonrpc": "2.0", "method": "eth_blockNumber", "params": [], "id": 1})
+                    if resp.status_code == 200:
+                        current = int(resp.json()["result"], 16)
+                        last_blocks[network] = max(0, current - 1000)
+                        logger.info("Listener starting from block %d on %s", last_blocks[network], network)
+        except Exception:
+            pass
 
     total_processed = 0
 

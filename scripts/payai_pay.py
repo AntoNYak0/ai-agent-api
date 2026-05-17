@@ -1,4 +1,4 @@
-"""Оплата через PayAI фасилитатор (gasless EIP-3009) + вызов API."""
+"""Pay via PayAI facilitator (gasless EIP-3009) + API call."""
 
 import asyncio, os, sys
 from pathlib import Path

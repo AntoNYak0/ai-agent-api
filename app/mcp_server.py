@@ -135,8 +135,10 @@ async def _verify_payment(payment_tx: str, amount: str, tool_name: str = "unknow
         balance = credits.get_balance(api_key)
         if not balance:
             return False, f"Invalid API key: {api_key[:10]}..."
-        if balance["credits"] <= 0:
-            return False, f"API key {api_key[:10]}... has no credits. Top up at /billing/top-up"
+        cost_cents = _credits_cost_cents(int(amount))
+        cost_credits = cost_cents * 10  # 10 credits per cent
+        if balance["credits"] < cost_credits:
+            return False, f"API key needs {cost_credits} credits, has {balance['credits']}. Top up at /billing/top-up"
         return True, f"credits:{api_key}"
 
     # 2. x402 crypto payment (AI agents)
@@ -414,6 +416,8 @@ async def validate_json_tool(data: str, schema: str = "", payment_tx: str = "", 
     result, _ = await deepseek_completion(VALIDATE_JSON_PROMPT, content, json_mode=True)
     if use_credits:
         credits.spend_credits(api_key, _credits_cost_cents(int(AMOUNTS["validate-json"])))
+    else:
+        await _settle_payment(payment_tx, int(AMOUNTS["validate-json"]))
     return result
 
 
@@ -427,6 +431,8 @@ async def classify_text_tool(text: str, categories: str = "", payment_tx: str = 
     result, _ = await deepseek_completion(CLASSIFY_TEXT_PROMPT, content, json_mode=True)
     if use_credits:
         credits.spend_credits(api_key, _credits_cost_cents(int(AMOUNTS["classify-text"])))
+    else:
+        await _settle_payment(payment_tx, int(AMOUNTS["classify-text"]))
     return result
 
 
@@ -439,6 +445,8 @@ async def extract_data_tool(text: str, payment_tx: str = "", api_key: str = "") 
     result, _ = await deepseek_completion(EXTRACT_DATA_PROMPT, text, json_mode=True)
     if use_credits:
         credits.spend_credits(api_key, _credits_cost_cents(int(AMOUNTS["extract-data"])))
+    else:
+        await _settle_payment(payment_tx, int(AMOUNTS["extract-data"]))
     return result
 
 
@@ -451,6 +459,8 @@ async def generate_regex_tool(description: str, payment_tx: str = "", api_key: s
     result, _ = await deepseek_completion(GENERATE_REGEX_PROMPT, description, json_mode=True)
     if use_credits:
         credits.spend_credits(api_key, _credits_cost_cents(int(AMOUNTS["generate-regex"])))
+    else:
+        await _settle_payment(payment_tx, int(AMOUNTS["generate-regex"]))
     return result
 
 
@@ -464,6 +474,8 @@ async def format_data_tool(data: str, source_format: str, target_format: str, pa
     result, _ = await deepseek_completion(prompt, data, json_mode=True)
     if use_credits:
         credits.spend_credits(api_key, _credits_cost_cents(int(AMOUNTS["format-data"])))
+    else:
+        await _settle_payment(payment_tx, int(AMOUNTS["format-data"]))
     return result
 
 
@@ -477,6 +489,8 @@ async def summarize_tool(text: str, max_length: int = 100, payment_tx: str = "",
     result, _ = await deepseek_completion(prompt, text, json_mode=True)
     if use_credits:
         credits.spend_credits(api_key, _credits_cost_cents(int(AMOUNTS["summarize"])))
+    else:
+        await _settle_payment(payment_tx, int(AMOUNTS["summarize"]))
     return result
 
 
