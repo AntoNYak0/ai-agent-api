@@ -1,8 +1,14 @@
 """Billing routes — API key management, credits, and analytics."""
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, Field
 from app.services import credits, analytics
+from app.services.blockchain_listener import register_wallet
 
 router = APIRouter(prefix="/billing", tags=["billing"])
+
+class RegisterWalletRequest(BaseModel):
+    api_key: str = Field(min_length=1, max_length=200)
+    wallet: str = Field(min_length=42, max_length=44)  # 0x + 40 hex
 
 
 @router.post("/create-key")
@@ -75,3 +81,22 @@ async def analytics_dashboard(key: str = Query(..., description="Admin API key")
     if not balance:
         raise HTTPException(status_code=403, detail="Invalid admin key")
     return analytics.get_stats(days)
+
+
+@router.post("/register-wallet")
+async def register_wallet_endpoint(body: RegisterWalletRequest):
+    """Link your wallet address to API key for auto-top-up.
+    When you send USDC to our wallet from this address, credits are added automatically.
+    """
+    balance = credits.get_balance(body.api_key)
+    if not balance:
+        raise HTTPException(status_code=404, detail="API key not found")
+    register_wallet(body.api_key, body.wallet)
+    return {
+        "status": "ok",
+        "message": f"Wallet {body.wallet[:10]}... linked to API key. "
+                   f"Send USDC on Base/Arbitrum/Optimism to auto-top-up. "
+                   f"Funds are detected within 60 seconds.",
+        "wallet": body.wallet,
+        "topup_wallet": "0xdE7eb04faE758055642f67f30D246CcB7136C95E",
+    }

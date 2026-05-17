@@ -123,6 +123,13 @@ app.include_router(stream.router)
 app.include_router(well_known_router)
 app.include_router(billing.router)
 
+# Start blockchain listener for auto-top-up on startup
+@app.on_event("startup")
+async def startup_blockchain_listener():
+    import asyncio
+    from app.services.blockchain_listener import start_listener
+    asyncio.create_task(start_listener())
+
 # Mount MCP server at /mcp — other AI agents connect here
 app.mount("/mcp", mcp_app.sse_app())
 
@@ -282,6 +289,64 @@ async def api_prices():
         "services": services,
         "composite_skills": skills,
     })
+
+
+@app.get("/docs/examples", response_class=HTMLResponse)
+async def docs_examples():
+    """Human-friendly API examples page — curl snippets for every endpoint."""
+
+    rows = []
+    for key, svc in sorted(ALL_SERVICES.items()):
+        method, path = key.split(" ", 1)
+        name = path.replace("/api/", "")
+        price = svc.get("max_price", svc.get("price"))
+        body_fields = svc.get("input", {})
+        body_json = ", ".join(f'"{k}": "..."' for k in body_fields)
+
+        rows.append(f"""<div class="endpoint-card">
+<div class="ep-head"><span class="method">POST</span> <code class="ep-path">{path}</code> <span class="ep-price">{price}</span></div>
+<div class="ep-desc">{svc["description"]}</div>
+<div class="ep-example">
+<pre>curl -X POST https://agent-api-ai.duckdns.org{path} \\
+  -H "Content-Type: application/json" \\
+  -d '{{ {body_json} }}'
+# → HTTP 402 Payment Required</pre>
+<pre># With API key (credits):
+curl -X POST https://agent-api-ai.duckdns.org{path} \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer ak-YOUR_KEY" \\
+  -d '{{ {body_json} }}'
+# → HTTP 200 (JSON result)</pre>
+</div></div>""")
+
+    return HTMLResponse(f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>API Examples — AI Agent API</title>
+<style>
+* {{ margin:0; padding:0; box-sizing:border-box }}
+body {{ font:14px/1.5 -apple-system,BlinkMacSystemFont,sans-serif; background:#0d1117; color:#c9d1d9; padding:40px 20px }}
+h1 {{ font-size:24px; margin-bottom:4px; color:#f0f6fc }}
+p.sub {{ color:#8b949e; margin-bottom:24px }}
+.note {{ background:#1a3a2a; border:1px solid #2ea043; border-radius:8px; padding:12px 16px; margin-bottom:24px; color:#3fb950 }}
+.endpoint-card {{ background:#161b22; border:1px solid #30363d; border-radius:8px; padding:20px; margin-bottom:12px }}
+.ep-head {{ margin-bottom:8px; display:flex; align-items:center; gap:10px; flex-wrap:wrap }}
+.method {{ background:#2ea043; color:#fff; padding:2px 8px; border-radius:4px; font-size:12px; font-weight:600 }}
+.ep-path {{ font-size:15px; color:#d2a8ff }}
+.ep-price {{ background:#0d1117; color:#58a6ff; padding:2px 8px; border-radius:4px; font-size:12px }}
+.ep-desc {{ color:#8b949e; margin-bottom:10px; font-size:13px }}
+.ep-example pre {{ background:#0d1117; padding:10px 14px; border-radius:4px; font-size:12px; margin-bottom:6px; overflow-x:auto; color:#c9d1d9 }}
+a {{ color:#58a6ff }}
+</style></head>
+<body>
+<h1>API Examples</h1>
+<p class="sub">Copy-paste curl snippets for all 19 endpoints. <a href="/">Dashboard</a> · <a href="/docs">Swagger</a></p>
+<div class="note"><strong>All endpoints require payment.</strong> No free tier. Pay with x402 (USDC) or API key (credits). <a href="/billing/create-key">Create a key</a>.</div>
+{''.join(rows)}
+<p style="text-align:center;color:#8b949e;font-size:11px;margin-top:30px">19 endpoints · Powered by DeepSeek V4 Pro · <a href="https://github.com/AntoNYak0/ai-agent-api">GitHub</a></p>
+</body></html>""")
 
 
 @app.get("/health")
