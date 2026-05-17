@@ -8,6 +8,12 @@ No more duplicated price lists.
 PER_1K_TOKENS_MICROUNITS = 3000
 CREDIT_MULTIPLIER = 1.5  # API keys pay 1.5x vs x402 crypto
 
+
+def round_up_cents(value: float) -> int:
+    """Round to nearest cent, always rounding .5 up. Avoids Python banker's rounding."""
+    import math
+    return max(1, math.floor(value + 0.5))
+
 # Network constants
 EVM_NETWORKS = [
     "eip155:8453",    # Base

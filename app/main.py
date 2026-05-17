@@ -400,12 +400,11 @@ async def health_deep():
         results["checks"]["billing"] = {"status": "error", "message": str(e)[:200]}
         results["status"] = "degraded"
 
-    # Facilitator RPCs (check each chain's RPC is reachable)
+    # Chain RPC health (internal — no URLs exposed)
     rpcs = {
         "base": "https://mainnet.base.org",
         "arbitrum": "https://arb1.arbitrum.io/rpc",
         "optimism": "https://mainnet.optimism.io",
-        "tron": "https://api.trongrid.io",
     }
     async with httpx.AsyncClient(timeout=10) as client:
         for chain, rpc_url in rpcs.items():
@@ -421,20 +420,18 @@ async def health_deep():
                     },
                 )
                 if r.status_code == 200:
-                    results["checks"][f"rpc_{chain}"] = {
+                    results["checks"][f"chain_{chain}"] = {
                         "status": "ok",
                         "latency_ms": round((time.time() - t0) * 1000),
                     }
                 else:
-                    results["checks"][f"rpc_{chain}"] = {
+                    results["checks"][f"chain_{chain}"] = {
                         "status": "error",
-                        "code": r.status_code,
                     }
                     results["status"] = "degraded"
-            except Exception as e:
-                results["checks"][f"rpc_{chain}"] = {
+            except Exception:
+                results["checks"][f"chain_{chain}"] = {
                     "status": "error",
-                    "message": str(e)[:200],
                 }
                 results["status"] = "degraded"
 

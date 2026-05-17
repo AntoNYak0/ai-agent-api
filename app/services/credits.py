@@ -32,9 +32,16 @@ def _load() -> dict:
 
 
 def _save(data: dict) -> None:
+    import tempfile, os as _os
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    with open(CREDITS_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+    fd, tmp = tempfile.mkstemp(dir=str(DATA_DIR), prefix="credits_", suffix=".tmp")
+    try:
+        with _os.fdopen(fd, "w") as f:
+            json.dump(data, f, indent=2)
+        _os.replace(tmp, str(CREDITS_FILE))  # atomic rename
+    except Exception:
+        _os.unlink(tmp)
+        raise
 
 
 def generate_api_key() -> str:

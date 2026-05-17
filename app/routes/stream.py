@@ -5,6 +5,7 @@ from app.services.deepseek import deepseek_completion_stream
 from app.services import credits, analytics
 from app.x402_setup import settle_actual_usage, validate_min_price
 from app.routes import get_network, get_tx
+from app.pricing import round_up_cents
 from app.prompts.audit import AUDIT_SYSTEM_PROMPT
 from app.prompts.refactor import REFACTOR_SYSTEM_PROMPT
 from app.prompts.docs import DOCS_SYSTEM_PROMPT
@@ -73,7 +74,7 @@ async def stream_tool(
             analytics.track(tool, "x402", True, tokens, microunits / 1e6)
         else:
             microunits = _BASE_MICROUNITS.get(tool, 20_000) + int((tokens / 1000) * 3000)
-            cost_cents = max(1, round((microunits / 10_000) * _CREDIT_MULTIPLIER))
+            cost_cents = round_up_cents((microunits / 10_000) * _CREDIT_MULTIPLIER)
             ok = credits.spend_credits(request.state.human_api_key, cost_cents)
             analytics.track(tool, "api_key", ok, tokens, cost_cents / 100 if ok else 0)
 

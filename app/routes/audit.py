@@ -7,6 +7,7 @@ from app.services.deepseek import deepseek_completion
 from app.services.cache import cached_completion
 from app.services import credits, analytics
 from app.prompts.audit import AUDIT_SYSTEM_PROMPT
+from app.pricing import round_up_cents
 from app.x402_setup import settle_actual_usage, validate_min_price
 
 MIN_PRICE_MICROUNITS = 10_000
@@ -29,7 +30,7 @@ async def audit_endpoint(request: Request, body: AuditRequest):
     microunits = BASE_MICROUNITS + int((tokens / 1000) * 3000)
 
     if is_api_key:
-        cost_cents = max(1, round((microunits / 10000) * CREDIT_MULTIPLIER))
+        cost_cents = round_up_cents((microunits / 10000) * CREDIT_MULTIPLIER)
         ok = credits.spend_credits(request.state.human_api_key, cost_cents)
         if not ok:
             return JSONResponse(status_code=402, content={"error": "insufficient_credits"})

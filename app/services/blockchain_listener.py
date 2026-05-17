@@ -12,7 +12,7 @@ import threading
 
 import httpx
 
-from app.pricing import WALLET
+from app.pricing import WALLET, round_up_cents
 
 logger = logging.getLogger("blockchain_listener")
 
@@ -163,7 +163,7 @@ async def _poll_once() -> int:
                 continue
 
             # Convert microunits to cents: 1 USDC = 1e6 microunits = 100 cents
-            amount_cents = max(1, round(amount_microunits / 10_000))
+            amount_cents = round_up_cents(amount_microunits / 10_000)
             try:
                 add_credits(api_key, amount_cents)
                 logger.info("Auto-top-up: %s... +%d cents ($%.2f) for %s...",

@@ -9,6 +9,7 @@ from mcp.server.fastmcp import FastMCP
 from app.config import settings
 from app.services.deepseek import deepseek_completion
 from app.services.replay_guard import is_replay
+from app.pricing import round_up_cents
 from app.services import credits
 from app.prompts.audit import AUDIT_SYSTEM_PROMPT
 from app.prompts.refactor import REFACTOR_SYSTEM_PROMPT
@@ -87,7 +88,7 @@ CREDIT_MULTIPLIER = 1.5  # humans pay 1.5x vs crypto (covers Stripe 2.9% + buffe
 def _credits_cost_cents(microunits: int) -> int:
     """Convert microunits to credit cents with 1.5x multiplier, min 1 cent."""
     cents = (microunits / 10000) * CREDIT_MULTIPLIER
-    return max(1, round(cents))
+    return round_up_cents(cents)
 
 # ── Pricing tables ──────────────────────────────────────────────
 

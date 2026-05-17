@@ -20,17 +20,22 @@ DB_DIR = "/opt/agent-api/data"
 DB_PATH = os.path.join(DB_DIR, "replay.db") if os.path.exists("/opt/agent-api") else "replay.db"
 
 _lock = threading.Lock()
+_conn: sqlite3.Connection | None = None
 
 
 def _get_conn() -> sqlite3.Connection:
+    """Persistent connection pool — single connection, reused across calls."""
+    global _conn
+    if _conn is not None:
+        return _conn
     os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute(
+    _conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    _conn.execute(
         "CREATE TABLE IF NOT EXISTS fingerprints "
         "(hash TEXT PRIMARY KEY, tool_name TEXT, created_at REAL)"
     )
-    conn.execute("PRAGMA journal_mode=WAL")
-    return conn
+    _conn.execute("PRAGMA journal_mode=WAL")
+    return _conn
 
 
 def _prune(conn: sqlite3.Connection) -> None:
@@ -60,28 +65,25 @@ def is_replay(payment_tx: str, tool_name: str) -> bool:
 
     with _lock:
         conn = _get_conn()
-        try:
-            _prune(conn)
+        _prune(conn)
 
-            row = conn.execute(
-                "SELECT created_at FROM fingerprints WHERE hash = ?",
-                (fingerprint,),
-            ).fetchone()
+        row = conn.execute(
+            "SELECT created_at FROM fingerprints WHERE hash = ?",
+            (fingerprint,),
+        ).fetchone()
 
-            if row:
-                age = time.time() - row[0]
-                logger.warning(
-                    "Replay detected: tool=%s tx=%s... age=%.1fs",
-                    tool_name, payment_tx[:16], age,
-                )
-                return True
-
-            conn.execute(
-                "INSERT OR REPLACE INTO fingerprints (hash, tool_name, created_at) "
-                "VALUES (?, ?, ?)",
-                (fingerprint, tool_name, time.time()),
+        if row:
+            age = time.time() - row[0]
+            logger.warning(
+                "Replay detected: tool=%s tx=%s... age=%.1fs",
+                tool_name, payment_tx[:16], age,
             )
-            conn.commit()
-            return False
-        finally:
-            conn.close()
+            return True
+
+        conn.execute(
+            "INSERT OR REPLACE INTO fingerprints (hash, tool_name, created_at) "
+            "VALUES (?, ?, ?)",
+            (fingerprint, tool_name, time.time()),
+        )
+        conn.commit()
+        return False

@@ -15,6 +15,7 @@ from app.prompts.micro import (
     SUMMARIZE_PROMPT, NL_TO_SQL_PROMPT, SQL_TO_NL_PROMPT, GIT_SUMMARIZE_PROMPT,
 )
 from app.routes import get_network, get_tx
+from app.pricing import round_up_cents
 from app.x402_setup import settle_actual_usage, validate_min_price
 from fastapi.responses import JSONResponse
 
@@ -39,7 +40,7 @@ async def _deduct_and_track(request: Request, service: str, tokens_used: int = 0
         microunits += int((tokens_used / 1000) * 3000)
 
     if is_api_key:
-        cost_cents = max(1, round((microunits / 10000) * _CREDIT_MULTIPLIER))
+        cost_cents = round_up_cents((microunits / 10000) * _CREDIT_MULTIPLIER)
         if not credits.spend_credits(request.state.human_api_key, cost_cents):
             analytics.track(service, "api_key", False, tokens_used, 0)
             return False
