@@ -128,6 +128,9 @@ _UPTO_SERVICES = {
     "POST /api/sql-to-nl":      ("$0.02", "Explain SQL queries in plain English"),
     "POST /api/git-summarize":  ("$0.02", "Summarize git diff into PR description"),
     "POST /api/translate-code": ("$0.05", "Translate code between languages (Python, TS, Rust, Go, Solidity)"),
+    "POST /api/whale-tracker":   ("$0.03", "Whale movement analysis — large USDC transfers on Base/Arbitrum"),
+    "POST /api/smart-money":     ("$0.05", "Smart money wallet analysis — win rate, patterns, profitability"),
+    "POST /api/price-feed":      ("$0.02", "AI-enhanced token price analysis with support/resistance levels"),
 }
 
 # Micro-tasks: exact pricing (flat fee)
@@ -158,6 +161,9 @@ _SCHEMAS = {
     "POST /api/generate-regex": {"description": "string"},
     "POST /api/format-data":    {"data": "string", "source_format": "csv|json|yaml", "target_format": "csv|json|yaml"},
     "POST /api/summarize":      {"text": "string", "max_length": "integer (optional)"},
+    "POST /api/whale-tracker": {"asset": "string", "wallet_address": "string (optional)", "timeframe": "string (optional)"},
+    "POST /api/smart-money":   {"wallet_address": "string", "chain": "string (optional)"},
+    "POST /api/price-feed":    {"token": "string"},
 }
 
 

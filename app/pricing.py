@@ -140,6 +140,33 @@ AI_UPTO_SERVICES = {
         "input": {"code": "string", "source_lang": "string", "target_lang": "string"},
         "output": {"translated_code": "string", "notes": "[string]"},
     },
+    "whale_tracker": {
+        "path": "/api/whale-tracker",
+        "description": "Whale movement analysis — large USDC transfers on Base/Arbitrum",
+        "max_price": "$0.03",
+        "base_microunits": 15_000,
+        "min_price_microunits": 7_500,
+        "input": {"asset": "string", "wallet_address": "string (optional)", "timeframe": "string (optional)"},
+        "output": {"asset": "string", "total_whale_volume_24h_usd": "number", "movements": "[...]", "net_flow_usd": "number", "analysis": "string", "confidence": "low|medium|high"},
+    },
+    "smart_money": {
+        "path": "/api/smart-money",
+        "description": "Smart money wallet analysis — win rate, patterns, profitability",
+        "max_price": "$0.05",
+        "base_microunits": 25_000,
+        "min_price_microunits": 12_500,
+        "input": {"wallet_address": "string", "chain": "string (optional)"},
+        "output": {"wallet": "string", "estimated_win_rate": "0-100%", "profitability_score": "0-100", "smart_money_indicators": "[...]", "analysis": "string", "confidence": "low|medium|high"},
+    },
+    "price_feed": {
+        "path": "/api/price-feed",
+        "description": "AI-enhanced token price analysis with support/resistance levels",
+        "max_price": "$0.02",
+        "base_microunits": 10_000,
+        "min_price_microunits": 5_000,
+        "input": {"token": "string"},
+        "output": {"token": "string", "estimated_price_range": "string", "support_zones": "[...]", "resistance_zones": "[...]", "sentiment": "bullish|bearish|neutral", "analysis": "string", "disclaimer": "Training data only. Not financial advice."},
+    },
 }
 
 EXACT_SERVICES = {
