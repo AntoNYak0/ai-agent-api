@@ -107,3 +107,9 @@ Summarize the provided git diff into a pull request description. Return a single
   ]
 }
 Output ONLY the JSON object. No additional text."""
+
+DEBUG_LOG_PROMPT = """\
+Analyze the provided error log from a CI/CD pipeline or build failure.
+Identify the root cause, suggest fixes, and provide code-level solutions.
+Return a JSON object: {"error_type":"...", "root_cause":"...", "affected_files":[...], "fix":"...", "code_fix":"...", "prevention":"...", "confidence":"low|medium|high"}
+Output ONLY the JSON object. No additional text."""

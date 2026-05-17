@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse
 from app.config import settings
 from app.x402_setup import configure_x402
-from app.routes import audit, refactor, docs, defi, trading, micro, billing, solidity_scan, stream, defi_signals
+from app.routes import audit, refactor, docs, defi, trading, micro, billing, solidity_scan, stream, defi_signals, security, data_feed
 from app.well_known import router as well_known_router
 from app.mcp_server import mcp as mcp_app
 from app.pricing import ALL_SERVICES, COMPOSITE_SKILLS, NETWORKS, WALLET
@@ -119,6 +119,8 @@ app.include_router(micro.router)
 app.include_router(trading.router)
 app.include_router(solidity_scan.router)
 app.include_router(defi_signals.router)
+app.include_router(security.router)
+app.include_router(data_feed.router)
 app.include_router(stream.router)
 app.include_router(well_known_router)
 app.include_router(billing.router)

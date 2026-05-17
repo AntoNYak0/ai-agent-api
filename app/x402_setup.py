@@ -131,6 +131,11 @@ _UPTO_SERVICES = {
     "POST /api/whale-tracker":   ("$0.03", "Whale movement analysis — large USDC transfers on Base/Arbitrum"),
     "POST /api/smart-money":     ("$0.05", "Smart money wallet analysis — win rate, patterns, profitability"),
     "POST /api/price-feed":      ("$0.02", "AI-enhanced token price analysis with support/resistance levels"),
+    "POST /api/agent-audit":     ("$0.50", "Full AI agent security audit — code, behavior, trust score"),
+    "POST /api/contract-verify": ("$1.00", "Smart contract formal verification — 36 SWC + DeFi exploits"),
+    "POST /api/security-score":  ("$0.10", "Rapid security assessment — quick score and risk level"),
+    "POST /api/data-feed":       ("$0.02", "Structured data feed on any topic — machine-readable JSON"),
+    "POST /api/debug-log":       ("$0.03", "CI/CD error log analysis — root cause and fix suggestions"),
 }
 
 # Micro-tasks: exact pricing (flat fee)
@@ -164,6 +169,11 @@ _SCHEMAS = {
     "POST /api/whale-tracker": {"asset": "string", "wallet_address": "string (optional)", "timeframe": "string (optional)"},
     "POST /api/smart-money":   {"wallet_address": "string", "chain": "string (optional)"},
     "POST /api/price-feed":    {"token": "string"},
+    "POST /api/agent-audit": {"agent_code": "string", "behavior_description": "string (optional)", "agent_name": "string (optional)"},
+    "POST /api/contract-verify": {"contract_code": "string", "contract_name": "string (optional)", "network": "string (optional)"},
+    "POST /api/security-score": {"code": "string", "description": "string (optional)"},
+    "POST /api/data-feed":  {"topic": "string", "format": "string (optional)"},
+    "POST /api/debug-log":  {"log": "string", "context": "string (optional)"},
 }
 
 

@@ -4,7 +4,7 @@ from app.models import (
     ValidateJsonRequest, ClassifyTextRequest, ExtractDataRequest,
     TranslateCodeRequest, GenerateRegexRequest, FormatDataRequest,
     SummarizeRequest, NlToSqlRequest, SqlToNlRequest, GitSummarizeRequest,
-    ServiceResponse,
+    ServiceResponse, BaseModel, Field,
 )
 from app.services.deepseek import deepseek_completion
 from app.services.cache import cached_completion
@@ -13,6 +13,7 @@ from app.prompts.micro import (
     VALIDATE_JSON_PROMPT, CLASSIFY_TEXT_PROMPT, EXTRACT_DATA_PROMPT,
     TRANSLATE_CODE_PROMPT, GENERATE_REGEX_PROMPT, FORMAT_DATA_PROMPT,
     SUMMARIZE_PROMPT, NL_TO_SQL_PROMPT, SQL_TO_NL_PROMPT, GIT_SUMMARIZE_PROMPT,
+    DEBUG_LOG_PROMPT,
 )
 from app.routes import get_network, get_tx
 from app.pricing import round_up_cents
@@ -26,7 +27,7 @@ _CREDIT_PRICES = {
     "validate-json": 1000, "classify-text": 2000, "extract-data": 15000,
     "generate-regex": 5000, "format-data": 10000, "summarize": 5000,
     "nl-to-sql": 10000, "sql-to-nl": 10000, "git-summarize": 10000,
-    "translate-code": 20000,
+    "translate-code": 20000, "debug-log": 3000,
 }
 _CREDIT_MULTIPLIER = 1.5
 
@@ -167,6 +168,21 @@ async def git_summarize(request: Request, body: GitSummarizeRequest):
             headers={"PAYMENT-REQUIRED": "true"})
     result, tokens = await cached_completion("git-summarize", body.diff, GIT_SUMMARIZE_PROMPT, None, json_mode=True)
     ok = await _deduct_and_track(request, "git-summarize", tokens)
+    if not ok:
+        return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
+    return ServiceResponse(result=result, payment_network=get_network(request), payment_tx=get_tx(request))
+
+
+class DebugLogRequest(BaseModel):
+    log: str = Field(max_length=50_000)
+    context: str | None = Field(default=None, max_length=5_000)
+
+
+@router.post("/api/debug-log")
+async def debug_log(request: Request, body: DebugLogRequest):
+    content = f"Context: {body.context or 'CI/CD build failure'}\n\nError log:\n{body.log}"
+    result, tokens = await cached_completion("debug-log", content, DEBUG_LOG_PROMPT, None, json_mode=True)
+    ok = await _deduct_and_track(request, "debug-log", tokens)
     if not ok:
         return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
     return ServiceResponse(result=result, payment_network=get_network(request), payment_tx=get_tx(request))
