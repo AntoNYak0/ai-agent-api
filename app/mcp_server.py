@@ -478,3 +478,67 @@ async def summarize_tool(text: str, max_length: int = 100, payment_tx: str = "",
     if use_credits:
         credits.spend_credits(api_key, _credits_cost_cents(int(AMOUNTS["summarize"])))
     return result
+
+
+# ── Composite skills (multi-step workflows) ────────────────────
+
+_skill_prices = {"defi-research": 80000, "code-health-check": 100000,
+                 "smart-contract-audit": 100000, "data-pipeline": 50000}
+
+
+@mcp.tool(name="defi-research", description="Full DeFi research: extract on-chain data → analyze protocol → summarize. Price: $0.08 USDC.")
+async def defi_research_tool(protocol: str, chain: str = "ethereum", onchain_data: str = "", payment_tx: str = "", api_key: str = "") -> str:
+    valid, info = await _verify_payment(payment_tx, _skill_prices["defi-research"], "defi-research", api_key)
+    if not valid:
+        return f"Payment required: {info}"
+    use_credits = info.startswith("credits:")
+    # Step 1: Extract structured data
+    extracted, _ = await deepseek_completion(EXTRACT_DATA_PROMPT, onchain_data or f"Protocol: {protocol}\nChain: {chain}", json_mode=True)
+    # Step 2: DeFi analysis
+    analyzed, _ = await deepseek_completion(DEFI_SYSTEM_PROMPT, f"Protocol: {protocol}\nBlockchain: {chain}\n\nData:\n{extracted}", json_mode=True)
+    # Step 3: Summarize
+    result, _ = await deepseek_completion(SUMMARIZE_PROMPT.format(max_length=200), analyzed, json_mode=True)
+    if use_credits:
+        credits.spend_credits(api_key, _credits_cost_cents(_skill_prices["defi-research"]))
+    return result
+
+
+@mcp.tool(name="code-health-check", description="Complete code health: security audit → refactor → generate docs. Price: $0.10 USDC.")
+async def code_health_check_tool(code: str, instructions: str = "", payment_tx: str = "", api_key: str = "") -> str:
+    valid, info = await _verify_payment(payment_tx, _skill_prices["code-health-check"], "code-health-check", api_key)
+    if not valid:
+        return f"Payment required: {info}"
+    use_credits = info.startswith("credits:")
+    audited, _ = await deepseek_completion(AUDIT_SYSTEM_PROMPT, code, json_mode=True)
+    refactored, _ = await deepseek_completion(REFACTOR_SYSTEM_PROMPT, f"Code:\n{code}\n\nAudit findings:\n{audited}", json_mode=True)
+    result, _ = await deepseek_completion(DOCS_SYSTEM_PROMPT, refactored, json_mode=True)
+    if use_credits:
+        credits.spend_credits(api_key, _credits_cost_cents(_skill_prices["code-health-check"]))
+    return result
+
+
+@mcp.tool(name="smart-contract-audit", description="Solidity audit + documentation: scan vulnerabilities → generate audit report. Price: $0.10 USDC.")
+async def smart_contract_audit_tool(code: str, payment_tx: str = "", api_key: str = "") -> str:
+    valid, info = await _verify_payment(payment_tx, _skill_prices["smart-contract-audit"], "smart-contract-audit", api_key)
+    if not valid:
+        return f"Payment required: {info}"
+    use_credits = info.startswith("credits:")
+    scanned, _ = await deepseek_completion(SOLIDITY_SCAN_PROMPT, code, json_mode=True)
+    result, _ = await deepseek_completion(DOCS_SYSTEM_PROMPT, f"Solidity audit results:\n{scanned}", json_mode=True)
+    if use_credits:
+        credits.spend_credits(api_key, _credits_cost_cents(_skill_prices["smart-contract-audit"]))
+    return result
+
+
+@mcp.tool(name="data-pipeline", description="Data processing pipeline: extract entities → convert format → summarize. Price: $0.05 USDC.")
+async def data_pipeline_tool(text: str, target_format: str = "json", payment_tx: str = "", api_key: str = "") -> str:
+    valid, info = await _verify_payment(payment_tx, _skill_prices["data-pipeline"], "data-pipeline", api_key)
+    if not valid:
+        return f"Payment required: {info}"
+    use_credits = info.startswith("credits:")
+    extracted, _ = await deepseek_completion(EXTRACT_DATA_PROMPT, text, json_mode=True)
+    formatted, _ = await deepseek_completion(FORMAT_DATA_PROMPT.format(source_format="json", target_format=target_format), extracted, json_mode=True)
+    result, _ = await deepseek_completion(SUMMARIZE_PROMPT.format(max_length=150), formatted, json_mode=True)
+    if use_credits:
+        credits.spend_credits(api_key, _credits_cost_cents(_skill_prices["data-pipeline"]))
+    return result

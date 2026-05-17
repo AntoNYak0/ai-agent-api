@@ -1,8 +1,10 @@
 """Audit route — OWASP Top 10 + SWC Registry security scan."""
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
+from app.routes import get_network, get_tx
 from app.models import AuditRequest, ServiceResponse
 from app.services.deepseek import deepseek_completion
+from app.services.cache import cached_completion
 from app.services import credits, analytics
 from app.prompts.audit import AUDIT_SYSTEM_PROMPT
 from app.x402_setup import settle_actual_usage, validate_min_price
@@ -15,20 +17,6 @@ CREDIT_MULTIPLIER = 1.5
 BASE_MICROUNITS = 20000
 
 
-def _get_network(request: Request) -> str:
-    try:
-        return request.state.payment_requirements.network
-    except AttributeError:
-        return "unknown"
-
-
-def _get_tx(request: Request) -> str:
-    try:
-        return request.state.payment_payload.transaction
-    except AttributeError:
-        return "unknown"
-
-
 @router.post("/api/audit")
 async def audit_endpoint(request: Request, body: AuditRequest):
     ok, err = validate_min_price(request, MIN_PRICE_MICROUNITS)
@@ -36,7 +24,7 @@ async def audit_endpoint(request: Request, body: AuditRequest):
         return JSONResponse(status_code=402, content=err,
             headers={"PAYMENT-REQUIRED": "true"})
 
-    result, tokens = await deepseek_completion(AUDIT_SYSTEM_PROMPT, body.code, body.context, json_mode=True)
+    result, tokens = await cached_completion("audit", body.code, AUDIT_SYSTEM_PROMPT, body.context, json_mode=True)
     is_api_key = hasattr(request.state, "human_api_key")
     microunits = BASE_MICROUNITS + int((tokens / 1000) * 3000)
 
@@ -48,4 +36,4 @@ async def audit_endpoint(request: Request, body: AuditRequest):
         await settle_actual_usage(request, microunits)
         analytics.track("audit", "x402", True, tokens, microunits / 1e6)
 
-    return ServiceResponse(result=result, payment_network=_get_network(request), payment_tx=_get_tx(request))
+    return ServiceResponse(result=result, payment_network=get_network(request), payment_tx=get_tx(request))

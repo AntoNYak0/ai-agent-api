@@ -7,12 +7,14 @@ from app.models import (
     ServiceResponse,
 )
 from app.services.deepseek import deepseek_completion
+from app.services.cache import cached_completion
 from app.services import credits, analytics
 from app.prompts.micro import (
     VALIDATE_JSON_PROMPT, CLASSIFY_TEXT_PROMPT, EXTRACT_DATA_PROMPT,
     TRANSLATE_CODE_PROMPT, GENERATE_REGEX_PROMPT, FORMAT_DATA_PROMPT,
     SUMMARIZE_PROMPT, NL_TO_SQL_PROMPT, SQL_TO_NL_PROMPT, GIT_SUMMARIZE_PROMPT,
 )
+from app.routes import get_network, get_tx
 from app.x402_setup import settle_actual_usage, validate_min_price
 from fastapi.responses import JSONResponse
 
@@ -26,20 +28,6 @@ _CREDIT_PRICES = {
     "translate-code": 20000,
 }
 _CREDIT_MULTIPLIER = 1.5
-
-
-def _get_network(request: Request) -> str:
-    try:
-        return request.state.payment_requirements.network
-    except AttributeError:
-        return "unknown"
-
-
-def _get_tx(request: Request) -> str:
-    try:
-        return request.state.payment_payload.transaction
-    except AttributeError:
-        return "unknown"
 
 
 async def _deduct_and_track(request: Request, service: str, tokens_used: int = 0):
@@ -71,7 +59,7 @@ async def validate_json(request: Request, body: ValidateJsonRequest):
     content = f"Target schema:\n{body.target_schema}\n\nData:\n{body.data}" if body.target_schema else body.data
     result, _ = await deepseek_completion(VALIDATE_JSON_PROMPT, content, json_mode=True)
     await _deduct_and_track(request, "validate-json")
-    return ServiceResponse(result=result, payment_network=_get_network(request), payment_tx=_get_tx(request))
+    return ServiceResponse(result=result, payment_network=get_network(request), payment_tx=get_tx(request))
 
 
 @router.post("/api/classify-text")
@@ -79,14 +67,14 @@ async def classify_text(request: Request, body: ClassifyTextRequest):
     content = f"Categories hint: {body.categories or 'auto-detect'}\n\nText:\n{body.text}"
     result, _ = await deepseek_completion(CLASSIFY_TEXT_PROMPT, content, json_mode=True)
     await _deduct_and_track(request, "classify-text")
-    return ServiceResponse(result=result, payment_network=_get_network(request), payment_tx=_get_tx(request))
+    return ServiceResponse(result=result, payment_network=get_network(request), payment_tx=get_tx(request))
 
 
 @router.post("/api/extract-data")
 async def extract_data(request: Request, body: ExtractDataRequest):
     result, _ = await deepseek_completion(EXTRACT_DATA_PROMPT, body.text, json_mode=True)
     await _deduct_and_track(request, "extract-data")
-    return ServiceResponse(result=result, payment_network=_get_network(request), payment_tx=_get_tx(request))
+    return ServiceResponse(result=result, payment_network=get_network(request), payment_tx=get_tx(request))
 
 
 @router.post("/api/translate-code")
@@ -96,16 +84,16 @@ async def translate_code(request: Request, body: TranslateCodeRequest):
         return JSONResponse(status_code=402, content=err,
             headers={"PAYMENT-REQUIRED": "true"})
     prompt = TRANSLATE_CODE_PROMPT.format(source_lang=body.source_lang, target_lang=body.target_lang)
-    result, tokens = await deepseek_completion(prompt, body.code, json_mode=True)
+    result, tokens = await cached_completion("translate-code", body.code, prompt, None, json_mode=True)
     await _deduct_and_track(request, "translate-code", tokens)
-    return ServiceResponse(result=result, payment_network=_get_network(request), payment_tx=_get_tx(request))
+    return ServiceResponse(result=result, payment_network=get_network(request), payment_tx=get_tx(request))
 
 
 @router.post("/api/generate-regex")
 async def generate_regex(request: Request, body: GenerateRegexRequest):
     result, _ = await deepseek_completion(GENERATE_REGEX_PROMPT, body.description, json_mode=True)
     await _deduct_and_track(request, "generate-regex")
-    return ServiceResponse(result=result, payment_network=_get_network(request), payment_tx=_get_tx(request))
+    return ServiceResponse(result=result, payment_network=get_network(request), payment_tx=get_tx(request))
 
 
 @router.post("/api/format-data")
@@ -113,7 +101,7 @@ async def format_data(request: Request, body: FormatDataRequest):
     prompt = FORMAT_DATA_PROMPT.format(source_format=body.source_format, target_format=body.target_format)
     result, _ = await deepseek_completion(prompt, body.data, json_mode=True)
     await _deduct_and_track(request, "format-data")
-    return ServiceResponse(result=result, payment_network=_get_network(request), payment_tx=_get_tx(request))
+    return ServiceResponse(result=result, payment_network=get_network(request), payment_tx=get_tx(request))
 
 
 @router.post("/api/summarize")
@@ -121,7 +109,7 @@ async def summarize(request: Request, body: SummarizeRequest):
     prompt = SUMMARIZE_PROMPT.format(max_length=body.max_length)
     result, _ = await deepseek_completion(prompt, body.text, json_mode=True)
     await _deduct_and_track(request, "summarize")
-    return ServiceResponse(result=result, payment_network=_get_network(request), payment_tx=_get_tx(request))
+    return ServiceResponse(result=result, payment_network=get_network(request), payment_tx=get_tx(request))
 
 
 # ── SQL / Dev tools ────────────────────────────────────────────
@@ -132,9 +120,9 @@ async def nl_to_sql(request: Request, body: NlToSqlRequest):
     if not ok:
         return JSONResponse(status_code=402, content=err,
             headers={"PAYMENT-REQUIRED": "true"})
-    result, tokens = await deepseek_completion(NL_TO_SQL_PROMPT, body.query, json_mode=True)
+    result, tokens = await cached_completion("nl-to-sql", body.query, NL_TO_SQL_PROMPT, None, json_mode=True)
     await _deduct_and_track(request, "nl-to-sql", tokens)
-    return ServiceResponse(result=result, payment_network=_get_network(request), payment_tx=_get_tx(request))
+    return ServiceResponse(result=result, payment_network=get_network(request), payment_tx=get_tx(request))
 
 
 @router.post("/api/sql-to-nl")
@@ -143,9 +131,9 @@ async def sql_to_nl(request: Request, body: SqlToNlRequest):
     if not ok:
         return JSONResponse(status_code=402, content=err,
             headers={"PAYMENT-REQUIRED": "true"})
-    result, tokens = await deepseek_completion(SQL_TO_NL_PROMPT, body.sql, json_mode=True)
+    result, tokens = await cached_completion("sql-to-nl", body.sql, SQL_TO_NL_PROMPT, None, json_mode=True)
     await _deduct_and_track(request, "sql-to-nl", tokens)
-    return ServiceResponse(result=result, payment_network=_get_network(request), payment_tx=_get_tx(request))
+    return ServiceResponse(result=result, payment_network=get_network(request), payment_tx=get_tx(request))
 
 
 @router.post("/api/git-summarize")
@@ -154,6 +142,6 @@ async def git_summarize(request: Request, body: GitSummarizeRequest):
     if not ok:
         return JSONResponse(status_code=402, content=err,
             headers={"PAYMENT-REQUIRED": "true"})
-    result, tokens = await deepseek_completion(GIT_SUMMARIZE_PROMPT, body.diff, json_mode=True)
+    result, tokens = await cached_completion("git-summarize", body.diff, GIT_SUMMARIZE_PROMPT, None, json_mode=True)
     await _deduct_and_track(request, "git-summarize", tokens)
-    return ServiceResponse(result=result, payment_network=_get_network(request), payment_tx=_get_tx(request))
+    return ServiceResponse(result=result, payment_network=get_network(request), payment_tx=get_tx(request))

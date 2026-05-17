@@ -1,8 +1,10 @@
 """Solidity scanner route — 36 SWC checks + DeFi exploit patterns."""
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
+from app.routes import get_network, get_tx
 from app.models import SolidityScanRequest, ServiceResponse
 from app.services.deepseek import deepseek_completion
+from app.services.cache import cached_completion
 from app.services import credits, analytics
 from app.prompts.solidity_scan import SOLIDITY_SCAN_PROMPT
 from app.x402_setup import settle_actual_usage, validate_min_price
@@ -15,20 +17,6 @@ CREDIT_MULTIPLIER = 1.5
 BASE_MICROUNITS = 40000
 
 
-def _get_network(request: Request) -> str:
-    try:
-        return request.state.payment_requirements.network
-    except AttributeError:
-        return "unknown"
-
-
-def _get_tx(request: Request) -> str:
-    try:
-        return request.state.payment_payload.transaction
-    except AttributeError:
-        return "unknown"
-
-
 @router.post("/api/solidity-scan")
 async def solidity_scan_endpoint(request: Request, body: SolidityScanRequest):
     ok, err = validate_min_price(request, MIN_PRICE_MICROUNITS)
@@ -36,7 +24,7 @@ async def solidity_scan_endpoint(request: Request, body: SolidityScanRequest):
         return JSONResponse(status_code=402, content=err,
             headers={"PAYMENT-REQUIRED": "true"})
 
-    result, tokens = await deepseek_completion(SOLIDITY_SCAN_PROMPT, body.code, body.context, json_mode=True)
+    result, tokens = await cached_completion("solidity-scan", body.code, SOLIDITY_SCAN_PROMPT, body.context, json_mode=True)
     is_api_key = hasattr(request.state, "human_api_key")
     microunits = BASE_MICROUNITS + int((tokens / 1000) * 3000)
     if is_api_key:
@@ -46,4 +34,4 @@ async def solidity_scan_endpoint(request: Request, body: SolidityScanRequest):
     else:
         await settle_actual_usage(request, microunits)
         analytics.track("solidity-scan", "x402", True, tokens, microunits / 1e6)
-    return ServiceResponse(result=result, payment_network=_get_network(request), payment_tx=_get_tx(request))
+    return ServiceResponse(result=result, payment_network=get_network(request), payment_tx=get_tx(request))

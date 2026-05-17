@@ -1,126 +1,33 @@
-"""Serve /.well-known/x402 manifest, OpenAPI spec, agent-card, and glama.json for agent discovery."""
+"""Serve /.well-known/x402 manifest, OpenAPI spec, agent-card, glama.json, and server-card for agent discovery."""
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
+from app.pricing import (
+    AI_UPTO_SERVICES, EXACT_SERVICES, COMPOSITE_SKILLS,
+    NETWORKS, WALLET, DOMAIN, GITHUB,
+)
 
 router = APIRouter()
 
-# ── Shared schemas ──────────────────────────────────────────────
-
-_AI_ENDPOINTS = {
-    "/api/audit": {
-        "price": "$0.01", "scheme": "upto", "maxPrice": "$0.05",
-        "summary": "Security scan with OWASP Top 10 + SWC Registry taxonomy",
-        "body": {"code": "string", "context": "string (optional)"},
-        "response": {"findings": "[{severity,category,line,description,fix,code_fix}]", "risk_score": "0-100", "summary": "string"},
-    },
-    "/api/refactor": {
-        "price": "$0.01", "scheme": "upto", "maxPrice": "$0.05",
-        "summary": "Refactor legacy code — DRY, SOLID, modern patterns",
-        "body": {"code": "string", "instructions": "string (optional)", "context": "string (optional)"},
-        "response": {"issues_found": "[...]", "refactored_code": "string", "changes": "[{what,why,before,after}]", "complexity_reduction_percent": "number"},
-    },
-    "/api/docs": {
-        "price": "$0.005", "scheme": "upto", "maxPrice": "$0.03",
-        "summary": "Generate technical docs with architecture, signatures, examples",
-        "body": {"code": "string", "context": "string (optional)"},
-        "response": {"overview": "string", "architecture": "string", "functions": "[{signature,params,returns,example}]", "dependencies": "[string]", "integration_examples": "[string]"},
-    },
-    "/api/defi-analyze": {
-        "price": "$0.01", "scheme": "upto", "maxPrice": "$0.04",
-        "summary": "DeFi protocol analysis — risks, tokenomics, architecture (training data only)",
-        "body": {"protocol": "string", "chain": "string (optional)", "details": "string (optional)", "onchain_data": "string (optional)"},
-        "response": {"overview": "string", "architecture": "{...}", "tokenomics": "{...}", "risks": "[{category,severity,description}]", "data_freshness": "training_data_only"},
-    },
-    "/api/trading-signal": {
-        "price": "$0.005", "scheme": "upto", "maxPrice": "$0.03",
-        "summary": "Crypto trading analytics — qualitative, training data only, NOT financial advice",
-        "body": {"asset": "string", "timeframe": "string (optional)", "additional_info": "string (optional)"},
-        "response": {"overview": "string", "technical_analysis": "{trend,support_zones,resistance_zones}", "sentiment": "{...}", "disclaimer": "string"},
-    },
-    "/api/solidity-scan": {
-        "price": "$0.02", "scheme": "upto", "maxPrice": "$0.08",
-        "summary": "Solidity vulnerability scanner — 36 SWC checks + DeFi exploit patterns",
-        "body": {"code": "string", "context": "string (optional)"},
-        "response": {"vulnerabilities": "[{swc_id,severity,title,description,line,fix,code_example}]", "security_score": "0-100", "gas_optimizations": "[...]", "recommendations": "[string]"},
-    },
-    "/api/nl-to-sql": {
-        "price": "$0.005", "scheme": "upto", "maxPrice": "$0.03",
-        "summary": "Convert natural language to SQL query",
-        "body": {"query": "string"},
-        "response": {"sql": "string", "explanation": "string", "dialect": "string", "assumed_schema": "string"},
-    },
-    "/api/sql-to-nl": {
-        "price": "$0.005", "scheme": "upto", "maxPrice": "$0.02",
-        "summary": "Explain SQL query in plain English",
-        "body": {"sql": "string"},
-        "response": {"explanation": "string", "tables_used": "[string]", "operations": "[string]", "complexity": "simple|moderate|complex"},
-    },
-    "/api/git-summarize": {
-        "price": "$0.005", "scheme": "upto", "maxPrice": "$0.02",
-        "summary": "Summarize git diff into PR description",
-        "body": {"diff": "string"},
-        "response": {"title": "string", "description": "string", "breaking_changes": "[string]", "files_summary": "[{file,what_changed,risk}]"},
-    },
-    "/api/translate-code": {
-        "price": "$0.01", "scheme": "upto", "maxPrice": "$0.05",
-        "summary": "Translate code between languages (Python, TS, Rust, Go, Solidity)",
-        "body": {"code": "string", "source_lang": "string", "target_lang": "string"},
-        "response": {"translated_code": "string", "notes": "[string]"},
-    },
-}
-
-_MICRO_ENDPOINTS = {
-    "/api/validate-json": {
-        "price": "$0.0005", "scheme": "exact",
-        "summary": "Validate JSON/YAML structure, schema, types",
-        "body": {"data": "string", "schema": "string (optional)"},
-        "response": {"valid": "boolean", "errors": "[{line,message,fix}]", "warnings": "[{line,message}]"},
-    },
-    "/api/classify-text": {
-        "price": "$0.001", "scheme": "exact",
-        "summary": "Classify text — sentiment, category, keywords, language",
-        "body": {"text": "string", "categories": "string (optional)"},
-        "response": {"sentiment": "positive|negative|neutral", "category": "string", "confidence": "0.0-1.0", "keywords": "[string]", "language": "string"},
-    },
-    "/api/extract-data": {
-        "price": "$0.005", "scheme": "exact",
-        "summary": "Extract structured data — names, emails, phones, URLs, dates, amounts",
-        "body": {"text": "string"},
-        "response": {"entities": "[{type,value,confidence}]"},
-    },
-    "/api/generate-regex": {
-        "price": "$0.002", "scheme": "exact",
-        "summary": "Generate regex pattern from description with test cases",
-        "body": {"description": "string"},
-        "response": {"pattern": "string", "flags": "string", "test_cases": "[{input,matches,captured}]", "explanation": "string"},
-    },
-    "/api/format-data": {
-        "price": "$0.003", "scheme": "exact",
-        "summary": "Convert data between CSV, JSON, YAML formats",
-        "body": {"data": "string", "source_format": "csv|json|yaml", "target_format": "csv|json|yaml"},
-        "response": {"converted": "string", "format": "string", "warnings": "[string]"},
-    },
-    "/api/summarize": {
-        "price": "$0.002", "scheme": "exact",
-        "summary": "Summarize text to N words, extract key points",
-        "body": {"text": "string", "max_length": "integer (optional)"},
-        "response": {"summary": "string", "word_count": "integer", "key_points": "[string]"},
-    },
-}
-
-NETWORKS = [
-    {"caip2": "eip155:8453", "name": "Base", "asset": "USDC", "contract": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"},
-    {"caip2": "eip155:42161", "name": "Arbitrum", "asset": "USDC", "contract": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"},
-    {"caip2": "eip155:10", "name": "Optimism", "asset": "USDC", "contract": "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85"},
-    {"caip2": "tron:0x2b6653dc", "name": "Tron", "asset": "USDT", "contract": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"},
-]
-
-WALLET = "0xdE7eb04faE758055642f67f30D246CcB7136C95E"
-DOMAIN = "https://agent-api-ai.duckdns.org"
-GITHUB = "https://github.com/AntoNYak0/ai-agent-api"
-
-ALL_ENDPOINTS = {**_AI_ENDPOINTS, **_MICRO_ENDPOINTS}
+# Build lookup dicts for templates
+_SVC = {}
+for name, info in AI_UPTO_SERVICES.items():
+    _SVC[info['path']] = {
+        'price': f"${info['base_microunits']/1_000_000:.4f}",
+        'scheme': 'upto',
+        'maxPrice': info['max_price'],
+        'summary': info['description'],
+        'body': info['input'],
+        'response': info['output'],
+    }
+for name, info in EXACT_SERVICES.items():
+    _SVC[info['path']] = {
+        'price': info['price'],
+        'scheme': 'exact',
+        'summary': info['description'],
+        'body': info['input'],
+        'response': info['output'],
+    }
 
 
 def _build_402_response(price: str, scheme: str) -> dict:
@@ -150,7 +57,7 @@ def _build_response_schema(info: dict) -> dict:
 
 def _build_openapi_spec() -> dict:
     paths = {}
-    for path, info in ALL_ENDPOINTS.items():
+    for path, info in _SVC.items():
         paths[path] = {
             "post": {
                 "summary": info["summary"],
@@ -370,7 +277,7 @@ async def openapi_spec():
 async def agent_card():
     """A2A (Agent-to-Agent) discovery card — standard format for agent registries."""
     tools = []
-    for path, info in ALL_ENDPOINTS.items():
+    for path, info in _SVC.items():
         name = path.replace("/api/", "")
         tools.append({
             "name": name,
@@ -417,7 +324,7 @@ async def mcp_server_card():
     https://smithery.ai/docs/build/publish
     """
     tools = []
-    for path, info in ALL_ENDPOINTS.items():
+    for path, info in _SVC.items():
         name = path.replace("/api/", "").replace("-", "_")
         props = {}
         required = []

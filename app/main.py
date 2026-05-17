@@ -6,6 +6,7 @@ from app.x402_setup import configure_x402
 from app.routes import audit, refactor, docs, defi, trading, micro, billing, solidity_scan, stream
 from app.well_known import router as well_known_router
 from app.mcp_server import mcp as mcp_app
+from app.pricing import ALL_SERVICES, COMPOSITE_SKILLS, NETWORKS, WALLET
 from app.services import credits, rate_limiter, analytics
 
 # ---------------------------------------------------------------------------
@@ -59,6 +60,21 @@ configure_x402(
     pay_to_solana=settings.pay_to_address_solana,
     testnet=settings.testnet,
 )
+
+@app.middleware("http")
+async def head_to_get_middleware(request: Request, call_next):
+    """UptimeRobot and other monitors use HEAD — convert to GET for health/well-known."""
+    if request.method == "HEAD" and (
+        request.url.path.startswith("/health") or
+        request.url.path.startswith("/.well-known") or
+        request.url.path == "/"
+    ):
+        request.scope["method"] = "GET"
+        response = await call_next(request)
+        response.headers["X-HEAD-Converted"] = "GET"
+        return response
+    return await call_next(request)
+
 
 @app.middleware("http")
 async def api_versioning_middleware(request: Request, call_next):
@@ -176,13 +192,19 @@ a {{ color:#58a6ff }}
 <div class="card">
 <h2>Get API Key — Pay with Crypto</h2>
 <p style="color:#8b949e;margin-bottom:12px">Send USDC to the address below, then contact to top up your key. 1 credit = $0.001.</p>
-<div style="background:#0d1117;border-radius:6px;padding:14px;margin-bottom:12px">
+<div style="background:#0d1117;border-radius:6px;padding:14px;margin-bottom:12px;display:flex;align-items:center;gap:14px">
+<div style="flex:1">
 <div style="font-size:12px;color:#8b949e;margin-bottom:4px">USDC (Base / Arbitrum / Optimism)</div>
 <code style="font-size:13px;word-break:break-all">0xdE7eb04faE758055642f67f30D246CcB7136C95E</code>
 </div>
-<div style="background:#0d1117;border-radius:6px;padding:14px;margin-bottom:12px">
+<img src="https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=0xdE7eb04faE758055642f67f30D246CcB7136C95E" width="60" height="60" style="border-radius:4px" alt="USDC QR">
+</div>
+<div style="background:#0d1117;border-radius:6px;padding:14px;margin-bottom:12px;display:flex;align-items:center;gap:14px">
+<div style="flex:1">
 <div style="font-size:12px;color:#8b949e;margin-bottom:4px">USDT (Tron TRC-20)</div>
 <code style="font-size:13px;word-break:break-all">TADavZEHddjYMQcL2cnaFadFVKAUmP9wMw</code>
+</div>
+<img src="https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=TADavZEHddjYMQcL2cnaFadFVKAUmP9wMw" width="60" height="60" style="border-radius:4px" alt="USDT QR">
 </div>
 <table>
 <tr><th>Tier</th><th>Price</th><th>Credits</th><th>Bonus</th></tr>
@@ -222,6 +244,43 @@ async def favicon():
         media_type="image/svg+xml",
         headers={"Cache-Control": "public, max-age=86400"},
     )
+
+
+@app.get("/api/prices")
+async def api_prices():
+    """Return structured pricing for all services — machine-readable for agents."""
+    services = []
+    for key, svc in sorted(ALL_SERVICES.items()):
+        method, path = key.split(" ", 1)
+        services.append({
+            "path": path,
+            "method": method,
+            "description": svc["description"],
+            "price": svc.get("max_price", svc.get("price")),
+            "scheme": "upto" if "max_price" in svc else "exact",
+        })
+
+    skills = []
+    for name, skill in COMPOSITE_SKILLS.items():
+        skills.append({
+            "name": name,
+            "description": skill["description"],
+            "price": skill["price"],
+            "chain": skill["chain"],
+        })
+
+    return JSONResponse({
+        "service": "AI Agent API",
+        "version": "2.0.0",
+        "payment": {
+            "protocol": "x402",
+            "version": 2,
+            "wallet": WALLET,
+            "networks": NETWORKS,
+        },
+        "services": services,
+        "composite_skills": skills,
+    })
 
 
 @app.get("/health")
