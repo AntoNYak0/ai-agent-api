@@ -285,10 +285,6 @@ def configure_x402(
             response.headers["X-X402-Bypassed"] = "true"
             return response
 
-        # Free trial: validate-json is free for first call (no payment required)
-        if request.url.path == "/api/validate-json":
-            return await call_next(request)
-
         try:
             response = await x402_mw(request, call_next)
             if response.status_code == 402:

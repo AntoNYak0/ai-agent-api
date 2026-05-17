@@ -70,21 +70,6 @@ async def _deduct_and_track(request: Request, service: str, tokens_used: int = 0
 async def validate_json(request: Request, body: ValidateJsonRequest):
     content = f"Target schema:\n{body.target_schema}\n\nData:\n{body.data}" if body.target_schema else body.data
     result, _ = await deepseek_completion(VALIDATE_JSON_PROMPT, content, json_mode=True)
-
-    # Free trial: if no API key and no x402 payment, execute without charging
-    has_api_key = hasattr(request.state, "human_api_key")
-    has_x402 = hasattr(request.state, "payment_payload")
-    if not has_api_key and not has_x402:
-        analytics.track("validate-json", "free_trial", True, 0, 0.0)
-        response = JSONResponse(content={
-            "result": result,
-            "payment_network": "free_trial",
-            "payment_tx": "free_trial",
-            "trial_note": "First call free. Subsequent calls require x402 payment or API key.",
-        })
-        response.headers["X-Free-Trial"] = "true"
-        return response
-
     await _deduct_and_track(request, "validate-json")
     return ServiceResponse(result=result, payment_network=_get_network(request), payment_tx=_get_tx(request))
 
