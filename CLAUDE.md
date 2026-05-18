@@ -45,7 +45,7 @@ c.close()
 
 **REST API** (`app/routes/*.py`) — 24 FastAPI POST routes. English JSON prompts, `json_mode=True`, 3x DeepSeek retries (1s/2s/4s). Payment: x402 middleware for agents, API key bypass for humans.
 
-**MCP Server** (`app/mcp_server.py`) — 16 FastMCP tools + 4 composite skills. Same prompts, same retries, replay protection, upto settlement. SSE transport at `/mcp/sse`.
+**MCP Server** (`app/mcp_server.py`) — 20 FastMCP tools (16 individual + 4 composite skills). Same prompts, same retries, replay protection, upto settlement. SSE transport at `/mcp/sse`. Each tool accepts optional `network` parameter (default `eip155:8453` = Base) for cross-chain payments.
 
 ### Payment flow
 
@@ -75,7 +75,7 @@ MCP (SSE):
 
 Execution order (outermost → innermost):
 
-1. `rate_limit_middleware` — 10 req/min/IP, skips `/health` and `/.well-known/*`
+1. `rate_limit_middleware` — 10 req/min/IP, skips `/health`, `/.well-known/*`, `/billing/*`
 2. `cache_control_middleware` — `Cache-Control: no-store` on `/api/*`
 3. `human_api_key_middleware` — detects `Authorization: Bearer ak-...`, sets `request.state.human_api_key`
 4. `api_versioning_middleware` — rewrites `/api/v1/X` → `/api/X`, adds Deprecation header to old `/api/X` (sunset Nov 2026)
@@ -110,8 +110,8 @@ Configured via `FACILITATOR_MODE` in `.env`:
 | `app/x402_setup.py` | x402 route configs (24 services), upto/exact pricing, `validate_min_price()` (rejects before AI), `settle_actual_usage()` (3 retries), feature flag `X402_ENABLED`, Bazaar discovery extension |
 | `app/mcp_server.py` | FastMCP: 16 tools + 4 composite skills with replay guard + upto settlement |
 | `app/facilitator.py` | `DirectFacilitator` (EVM on-chain) + `TronFacilitator` (TRC-20 via TronGrid) |
-| `app/well_known.py` | 5 discovery endpoints: `/.well-known/x402`, `/openapi.json`, `/agent-card.json`, `/glama.json`, `/mcp/server-card.json` |
-| `app/config.py` | Pydantic Settings from `.env`: DeepSeek, pay_to addresses, `facilitator_mode` (payai/direct/cdp), `cdp_api_key_id/secret`, testnet, x402_enabled |
+| `app/well_known.py` | 6 discovery endpoints: `/.well-known/x402`, `/openapi.json`, `/agent-card.json`, `/glama.json`, `/mcp/server-card.json`, `/.well-known/agentic-market-services.json` |
+| `app/config.py` | Pydantic Settings from `.env`. `extra="ignore"` — old fields in .env won't break startup |
 | `app/cdp_auth.py` | CDP JWT auth provider — generates Ed25519-signed JWTs per facilitator endpoint. Only used when `facilitator_mode=cdp`. |
 | `app/models.py` | Pydantic request models with `Field(max_length=...)` on all strings |
 | `app/routes/__init__.py` | Shared helpers: `get_network(request)` and `get_tx(request)` — used by all route files |
@@ -145,7 +145,7 @@ Configured via `FACILITATOR_MODE` in `.env`:
 Token rate: $0.003/1K tokens (DeepSeek cost ~$0.0014/1K, ~2x margin). API key multiplier: 1.5x.
 
 **Upto** (pay per actual tokens, base→max):
-audit $0.01–0.05, refactor $0.01–0.05, docs $0.005–0.03, defi-analyze $0.01–0.04, trading-signal $0.005–0.03, solidity-scan $0.02–0.08, nl-to-sql $0.005–0.03, sql-to-nl $0.005–0.02, git-summarize $0.005–0.02, translate-code $0.01–0.05, whale-tracker $0.015–0.03, smart-money $0.025–0.05, price-feed $0.01–0.02, agent-audit $0.25–0.50, contract-verify $0.50–1.00, security-score $0.05–0.10, data-feed $0.01–0.02, debug-log $0.03 (exact in pricing.py, upto in x402_setup.py — check before changing).
+audit $0.01–0.05, refactor $0.01–0.05, docs $0.005–0.03, defi-analyze $0.01–0.04, trading-signal $0.005–0.03, solidity-scan $0.02–0.08, nl-to-sql $0.005–0.03, sql-to-nl $0.005–0.02, git-summarize $0.005–0.02, translate-code $0.01–0.05, whale-tracker $0.015–0.03, smart-money $0.025–0.05, price-feed $0.01–0.02, agent-audit $0.25–0.50, contract-verify $0.50–1.00, security-score $0.05–0.10, data-feed $0.01–0.02, debug-log $0.005–0.03.
 
 **Exact** (flat fee):
 validate-json $0.0005, classify-text $0.001, extract-data $0.005, generate-regex $0.002, format-data $0.003, summarize $0.002.
@@ -157,16 +157,27 @@ validate-json $0.0005, classify-text $0.001, extract-data $0.005, generate-regex
 | Marketplace | Status |
 |-------------|--------|
 | mcp.so | Listed |
-| Smithery.ai | Listed (16 tools) |
+| Smithery.ai | Listed (20 tools) |
 | Glama.ai | Connector added |
 | x402scan.com | `.well-known/x402` indexed, POST-only blocked |
-| AgenticTrade | 16 services active |
+| AgenticTrade | 24 services active |
 | Agentic.market | Blocked (needs CDP Facilitator + Coinbase KYC — impossible from Russia) |
 | the402.ai | Pending registration ($0.01 USDC fee, needs funded payer wallet) |
 
-## DuckDNS
+## DNS / Network
 
-Domain `agent-api-ai.duckdns.org` → `77.239.107.30`. Cron auto-update every 5 min. Some ISPs (Russian) fail to resolve DuckDNS — workaround: `curl --resolve agent-api-ai.duckdns.org:443:77.239.107.30 https://...`
+Domain `agent-api-ai.duckdns.org` → `77.239.107.30`. DuckDNS cron auto-update every 5 min.
+
+Some ISPs (Russian) fail to resolve DuckDNS — always use `--resolve` when curling from local:
+```bash
+curl --resolve agent-api-ai.duckdns.org:443:77.239.107.30 https://agent-api-ai.duckdns.org/health
+```
+
+Integration test also needs explicit base URL when run locally:
+```bash
+python scripts/integration_test.py --base-url https://agent-api-ai.duckdns.org
+```
+(Test hits `127.0.0.1:8000` by default — only works with local uvicorn.)
 
 ## Wallets
 
@@ -181,7 +192,7 @@ Domain `agent-api-ai.duckdns.org` → `77.239.107.30`. Cron auto-update every 5 
 - Data: `/opt/agent-api/data/` (credits.json, analytics.json, replay.db)
 - Logs: `/opt/agent-api/logs/app.log` (RotatingFileHandler, 10MB × 5 backups)
 - Nginx: `/etc/nginx/sites-available/agent-api`, Let's Encrypt auto-renewal via certbot.timer
-- SFTP deploy: `python scripts/deploy.py`
+- SFTP deploy: `VPS_PASSWORD="..." python scripts/deploy.py` (reads password from env var, deploys from local `agent-api/` to `/opt/agent-api/`)
 
 ## Route pattern (when adding new endpoints)
 

@@ -167,9 +167,15 @@ async def x402_manifest():
             "description": info["summary"],
         }
 
-    available_tools = sorted(set(
-        path.replace("/api/", "").replace("-", "_") for path in _SVC
-    ))
+    # Actual MCP tools (16 individual + 4 composite skills)
+    # NOT auto-generated from _SVC — some REST endpoints have no MCP equivalent
+    available_tools = [
+        "audit", "refactor", "docs", "defi", "trading", "solidity-scan",
+        "nl-to-sql", "sql-to-nl", "git-summarize", "translate-code",
+        "validate-json", "classify-text", "extract-data",
+        "generate-regex", "format-data", "summarize",
+        "defi-research", "code-health-check", "smart-contract-audit", "data-pipeline",
+    ]
 
     return JSONResponse({
         "x402_version": 2,
