@@ -509,9 +509,9 @@ async def cache_control_middleware(request, call_next):
 
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
-    """Rate limit: 10 requests/minute per IP. Skips health/well-known paths."""
+    """Rate limit: 10 requests/minute per IP. Skips health/well-known/billing paths."""
     path = request.url.path
-    if path.startswith("/health") or path.startswith("/.well-known"):
+    if path.startswith("/health") or path.startswith("/.well-known") or path.startswith("/billing"):
         return await call_next(request)
 
     ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "unknown")
