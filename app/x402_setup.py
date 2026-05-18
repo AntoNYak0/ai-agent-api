@@ -60,70 +60,21 @@ def validate_min_price(request, min_microunits: int):
 
 
 async def settle_actual_usage(request, actual_microunits: int):
-    """Settle x402 payment with ACTUAL (not max) amount — the core of upto pricing.
+    """Mark actual settlement amount for upto pricing.
 
-    Call AFTER AI inference completes. Only settles for x402 crypto payments
-    (skips API key users and testnet). Retries 3 times with backoff on facilitator failure.
+    Does NOT call facilitator.settle() — the x402 middleware handles settlement
+    via Settlement-Overrides header (set in x402_response_header_middleware).
     """
-    import asyncio
-    from x402.schemas import PaymentPayload, PaymentRequirements, ResourceInfo
-
-    # Only settle for real x402 payments (not API keys, not testnet)
+    # Only for real x402 payments (not API keys)
     if hasattr(request.state, "human_api_key"):
         return
     if not hasattr(request.state, "payment_payload"):
         return
 
-    facilitator = getattr(request.app.state, "x402_facilitator", None)
-    if not facilitator:
-        return
-
-    pay_to = request.app.state.x402_pay_to
-    payload_obj = request.state.payment_payload
-    reqs = request.state.payment_requirements
-
-    # Build resource info from the request path (required by CDP for Bazaar indexing)
-    resource_url = str(request.url).split("?")[0]  # strip query params
-    resource_info = ResourceInfo(
-        url=resource_url,
-        mime_type="application/json",
-        service_name="AI Agent API",
-    )
-
-    settle_payload = PaymentPayload(
-        x402_version=2,
-        payload=payload_obj.payload if hasattr(payload_obj, 'payload') else {"payer": "rest-client"},
-        accepted=PaymentRequirements(
-            scheme="exact",  # settlement is always exact amount
-            network=getattr(reqs, 'network', 'eip155:8453'),
-            asset=getattr(reqs, 'asset', '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913'),
-            amount=str(actual_microunits),
-            pay_to=pay_to,
-            max_timeout_seconds=300,
-        ),
-        resource=resource_info,
-    )
-
-    for attempt in range(3):
-        try:
-            await facilitator.settle(settle_payload)
-            request.state.x402_settled = True
-            request.state.x402_settled_amount = actual_microunits
-            logger.info("Settled actual: %d microunits (~$%.4f)%s",
-                actual_microunits, actual_microunits / 1e6,
-                f" (attempt {attempt + 1})" if attempt > 0 else "")
-            return
-        except Exception as e:
-            if attempt < 2:
-                delay = [1.0, 2.0][attempt]
-                logger.warning("Settle attempt %d failed: %s. Retry in %.1fs...", attempt + 1, e, delay)
-                await asyncio.sleep(delay)
-            else:
-                logger.warning("Settle failed after 3 attempts (non-critical, result still delivered): %s", e)
-
-    # Best effort: mark as settled even if facilitator failed
     request.state.x402_settled = True
     request.state.x402_settled_amount = actual_microunits
+    logger.info("Settlement queued: %d microunits (~$%.4f)",
+        actual_microunits, actual_microunits / 1e6)
 
 # Solana mainnet (reserved for future use)
 SOLANA_NET = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"
@@ -259,14 +210,18 @@ def configure_x402(
     app.state.x402_pay_to = pay_to_evm
     logger.info("x402: facilitator stored on app.state — routes will settle with actual usage")
 
-    common_networks = list(evm_networks)
+    # PayAI only supports Base; Direct supports all 3 EVM networks
+    if mode == "payai":
+        common_networks = ["eip155:8453"] if not testnet else ["eip155:84532"]
+    else:
+        common_networks = list(evm_networks)
 
     def make_upto_option(network: str, max_price: str) -> PaymentOption:
-        """Upto/dynamic pricing: client authorizes max, we settle actual usage."""
+        """AI services: agent authorizes max price (exact), we settle actual usage."""
         return PaymentOption(
-            scheme="upto",
+            scheme="exact",
             pay_to=pay_to_evm,
-            price=max_price,       # max authorized amount
+            price=max_price,       # max authorized amount (settled at actual)
             network=network,
         )
 
@@ -280,12 +235,18 @@ def configure_x402(
         )
 
     def _bazaar_schema(route_key: str) -> dict:
+        """Build Bazaar extension inputSchema for PayAI validation."""
         props = _SCHEMAS.get(route_key, {})
-        required = [k for k, v in props.items() if "optional" not in v]
+        required = [k for k, v in props.items() if "optional" not in v.lower()]
         schema_props = {}
         for k, v in props.items():
-            type_str = v.split(" ")[0] if " " in v else "string"
-            schema_props[k] = {"type": type_str, "description": v.replace(" (optional)", "")}
+            type_str = "string"
+            if "integer" in v.lower():
+                type_str = "integer"
+            elif "boolean" in v.lower():
+                type_str = "boolean"
+            desc = v.replace(" (optional)", "").replace("(optional)", "")
+            schema_props[k] = {"type": type_str, "description": desc.strip()}
         return {
             "type": "object",
             "properties": schema_props,
@@ -299,12 +260,7 @@ def configure_x402(
             accepts=[make_upto_option(net, price) for net in common_networks],
             description=desc,
             mime_type="application/json",
-            extensions={
-                "bazaar": {
-                    "discoverable": True,
-                    "inputSchema": _bazaar_schema(route_key),
-                }
-            },
+            extensions={"bazaar": {"discoverable": True, "info": {"input": {"type": "http"}}}},
         )
 
     for route_key, (price, desc) in _EXACT_SERVICES.items():
@@ -312,12 +268,7 @@ def configure_x402(
             accepts=[make_exact_option(net, price) for net in common_networks],
             description=desc,
             mime_type="application/json",
-            extensions={
-                "bazaar": {
-                    "discoverable": True,
-                    "inputSchema": _bazaar_schema(route_key),
-                }
-            },
+            extensions={"bazaar": {"discoverable": True, "info": {"input": {"type": "http"}}}},
         )
 
     paywall = PaywallConfig(
@@ -335,6 +286,18 @@ def configure_x402(
         "MCP: https://agent-api-ai.duckdns.org/mcp/sse "
         "Docs: https://github.com/AntoNYak0/ai-agent-api"
     ).format(pay_to=pay_to_evm, nets=networks_help)
+
+    @app.middleware("http")
+    async def x402_response_header_middleware(request, call_next):
+        """Add PAYMENT-RESPONSE + Settlement-Overrides headers (INNER — runs before x402 settlement)."""
+        response = await call_next(request)
+        if hasattr(request.state, "x402_settled") and request.state.x402_settled:
+            amount = getattr(request.state, "x402_settled_amount", 0)
+            response.headers["PAYMENT-RESPONSE"] = "true"
+            response.headers["X-Payment-Amount"] = f"${amount / 1e6:.6f} USDC"
+            response.headers["Settlement-Overrides"] = __import__("json").dumps({"amount": str(amount)})
+            logger.info("PAYMENT-RESPONSE: settlement override %d microunits", amount)
+        return response
 
     @app.middleware("http")
     async def x402_payment_middleware(request, call_next):
@@ -371,15 +334,3 @@ def configure_x402(
                     "X-Payment-Help": PAYMENT_HELP.replace("\n", " "),
                 },
             )
-
-    @app.middleware("http")
-    async def x402_response_header_middleware(request, call_next):
-        """Add PAYMENT-RESPONSE header when x402 settlement completed successfully."""
-        response = await call_next(request)
-        if hasattr(request.state, "x402_settled") and request.state.x402_settled:
-            response.headers["PAYMENT-RESPONSE"] = "true"
-            amount = getattr(request.state, "x402_settled_amount", 0)
-            usd = amount / 1e6
-            response.headers["X-Payment-Amount"] = f"${usd:.6f} USDC"
-            logger.info("PAYMENT-RESPONSE: settled %d microunits", amount)
-        return response
