@@ -237,11 +237,8 @@ class DirectFacilitator:
                 invalid_message=f"Payment verification failed: {e}",
             )
 
-    async def settle(
-        self,
-        payload: PaymentPayload,
-        requirements: PaymentRequirements,
-    ) -> SettleResponse:
+    async def settle(self, payload: PaymentPayload) -> SettleResponse:
+        requirements = payload.accepted
         if self.testnet:
             return SettleResponse(
                 success=True,
@@ -443,11 +440,8 @@ class TronFacilitator:
                 invalid_message=f"TRON payment verification failed: {e}",
             )
 
-    async def settle(
-        self,
-        payload: PaymentPayload,
-        requirements: PaymentRequirements,
-    ) -> SettleResponse:
+    async def settle(self, payload: PaymentPayload) -> SettleResponse:
+        requirements = payload.accepted
         return SettleResponse(
             success=True,
             payer=payload.payload.get("payer", ""),

@@ -56,8 +56,6 @@ configure_x402(
     app=app,
     pay_to_evm=settings.pay_to_address_evm,
     pay_to_tron=settings.pay_to_address_tron,
-    facilitator_url=settings.facilitator_url,
-    pay_to_solana=settings.pay_to_address_solana,
     testnet=settings.testnet,
 )
 

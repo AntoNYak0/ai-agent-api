@@ -12,6 +12,9 @@ files = [
     "app/services/credits.py",
     "app/services/analytics.py",
     "app/services/rate_limiter.py",
+    "app/services/deepseek.py",
+    "app/services/cache.py",
+    "app/services/blockchain_listener.py",
     "app/models.py",
     "app/main.py",
     "app/well_known.py",
@@ -19,7 +22,11 @@ files = [
     "app/x402_setup.py",
     "app/facilitator.py",
     "app/config.py",
+    "app/cdp_auth.py",
+    "app/pricing.py",
     ".env",
+    "requirements.txt",
+    "app/routes/__init__.py",
     "app/routes/billing.py",
     "app/routes/audit.py",
     "app/routes/refactor.py",
@@ -29,14 +36,27 @@ files = [
     "app/routes/micro.py",
     "app/routes/solidity_scan.py",
     "app/routes/stream.py",
-    "app/services/deepseek.py",
+    "app/routes/security.py",
+    "app/routes/defi_signals.py",
+    "app/routes/data_feed.py",
+    "app/prompts/__init__.py",
+    "app/prompts/audit.py",
+    "app/prompts/refactor.py",
+    "app/prompts/docs.py",
+    "app/prompts/defi.py",
+    "app/prompts/trading.py",
+    "app/prompts/solidity_scan.py",
+    "app/prompts/micro.py",
+    "app/prompts/security.py",
+    "app/prompts/defi_signals.py",
+    "app/prompts/data_feed.py",
     "scripts/setup_https.sh",
     "scripts/monitor.sh",
     "scripts/backup.sh",
     "scripts/integration_test.py",
 ]
 
-local_base = r"c:\Users\Admin\Desktop\agent-api"
+local_base = r"c:\Users\Admin\Desktop\Рынок агентов _ Главная_files\agent-api"
 
 ssh = paramiko.SSHClient()
 ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -74,18 +94,18 @@ print("\nRestarting agent-api...")
 stdin, stdout, stderr = ssh.exec_command(
     "systemctl restart agent-api && sleep 2 && curl -s http://localhost:8000/health"
 )
-out = stdout.read().decode()
-err = stderr.read().decode()
-print(out)
+out = stdout.read().decode(errors='replace')
+err = stderr.read().decode(errors='replace')
+print(out.encode('ascii', errors='replace').decode())
 if err:
-    print("STDERR:", err)
+    print("STDERR:", err.encode("ascii", errors="replace").decode())
 
 # Check logs for errors
 stdin, stdout, stderr = ssh.exec_command(
     "journalctl -u agent-api --no-pager -n 5"
 )
 print("\nRecent logs:")
-print(stdout.read().decode())
+print(stdout.read().decode(errors='replace').encode('ascii', errors='replace').decode())
 
 ssh.close()
 print("\nDone.")

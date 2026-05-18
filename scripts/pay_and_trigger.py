@@ -3,7 +3,7 @@
 x402 payer script — sends real payment to our API and triggers Bazaar indexing.
 
 Usage:
-  1. Create scripts/.env with PRIVATE_KEY=... (NOT the same wallet as PAY_TO!)
+  1. Create scripts/.env with PAYER_PRIVATE_KEY=... (NOT the same wallet as PAY_TO!)
   2. Fund this wallet with ~$1 USDC on Base
   3. Run: python scripts/pay_and_trigger.py
 
@@ -32,14 +32,14 @@ load_dotenv(env_path)
 # Also try agent-api/.env for fallback
 load_dotenv(Path(__file__).parent.parent / ".env")
 
-PRIVATE_KEY = os.getenv("PRIVATE_KEY", "")
+PRIVATE_KEY = os.getenv("PAYER_PRIVATE_KEY", "")
 API_URL = os.getenv("API_URL", "https://agent-api-ai.duckdns.org")
 
 if not PRIVATE_KEY:
-    print("ERROR: PRIVATE_KEY not set.")
+    print("ERROR: PAYER_PRIVATE_KEY not set.")
     print()
     print("Create file agent-api/scripts/.env with:")
-    print("  PRIVATE_KEY=0xYOUR_PRIVATE_KEY_FROM_ANOTHER_WALLET")
+    print("  PAYER_PRIVATE_KEY=0xYOUR_PRIVATE_KEY_FROM_ANOTHER_WALLET")
     print()
     print("Steps:")
     print("  1. Create a new wallet in MetaMask/Rabby")

@@ -19,6 +19,9 @@ from app.config import settings
 
 logger = logging.getLogger("x402")
 
+CDP_FACILITATOR_URL = "https://api.cdp.coinbase.com/platform/v2/x402"
+PAYAI_FACILITATOR_URL = "https://facilitator.payai.network"
+
 # Token rate: $0.003 per 1K tokens (DeepSeek cost ~$0.0014/1K, x2 margin)
 PER_1K_TOKENS_MICROUNITS = 3000
 
@@ -63,7 +66,7 @@ async def settle_actual_usage(request, actual_microunits: int):
     (skips API key users and testnet). Retries 3 times with backoff on facilitator failure.
     """
     import asyncio
-    from x402.schemas import PaymentPayload, PaymentRequirements
+    from x402.schemas import PaymentPayload, PaymentRequirements, ResourceInfo
 
     # Only settle for real x402 payments (not API keys, not testnet)
     if hasattr(request.state, "human_api_key"):
@@ -79,6 +82,14 @@ async def settle_actual_usage(request, actual_microunits: int):
     payload_obj = request.state.payment_payload
     reqs = request.state.payment_requirements
 
+    # Build resource info from the request path (required by CDP for Bazaar indexing)
+    resource_url = str(request.url).split("?")[0]  # strip query params
+    resource_info = ResourceInfo(
+        url=resource_url,
+        mime_type="application/json",
+        service_name="AI Agent API",
+    )
+
     settle_payload = PaymentPayload(
         x402_version=2,
         payload=payload_obj.payload if hasattr(payload_obj, 'payload') else {"payer": "rest-client"},
@@ -90,6 +101,7 @@ async def settle_actual_usage(request, actual_microunits: int):
             pay_to=pay_to,
             max_timeout_seconds=300,
         ),
+        resource=resource_info,
     )
 
     for attempt in range(3):
@@ -181,16 +193,51 @@ def configure_x402(
     app: FastAPI,
     pay_to_evm: str,
     pay_to_tron: str | None,
-    facilitator_url: str,
-    pay_to_solana: str | None = None,
     testnet: bool = True,
 ) -> None:
-    if testnet:
+    mode = settings.facilitator_mode
+
+    if mode == "cdp":
+        # CDP Facilitator — required for agentic.market listing (needs Coinbase KYC)
+        if not settings.cdp_api_key_id or not settings.cdp_api_key_secret:
+            logger.warning(
+                "facilitator_mode=cdp but CDP_API_KEY_ID/CDP_API_KEY_SECRET not set. "
+                "Falling back to PayAI."
+            )
+            mode = "payai"
+
+    if mode == "cdp":
+        from app.cdp_auth import create_cdp_auth_provider
+
+        auth_provider = create_cdp_auth_provider(
+            settings.cdp_api_key_id,
+            settings.cdp_api_key_secret,
+        )
+        facilitator = HTTPFacilitatorClient(
+            FacilitatorConfig(
+                url=CDP_FACILITATOR_URL,
+                timeout=30.0,
+                auth_provider=auth_provider,
+                identifier="cdp",
+            )
+        )
+        logger.info("x402: using CDP Facilitator at %s (agentic.market listing enabled)", CDP_FACILITATOR_URL)
+    elif mode == "payai":
+        facilitator = HTTPFacilitatorClient(
+            FacilitatorConfig(
+                url=PAYAI_FACILITATOR_URL,
+                timeout=30.0,
+                identifier="payai",
+            )
+        )
+        logger.info("x402: using PayAI Facilitator at %s (no KYC, free)", PAYAI_FACILITATOR_URL)
+    elif testnet:
         facilitator = DirectFacilitator(testnet=True, pay_to=pay_to_evm)
         logger.info("x402: using DirectFacilitator (testnet mode)")
     else:
         facilitator = DirectFacilitator(testnet=False, pay_to=pay_to_evm)
         logger.info("x402: using DirectFacilitator (mainnet — onchain RPC verification)")
+
     server = x402ResourceServer(facilitator)
 
     if testnet:

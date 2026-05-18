@@ -8,11 +8,11 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent / ".env")
 load_dotenv(Path(__file__).parent.parent / ".env")
 
-PRIVATE_KEY = os.getenv("PRIVATE_KEY", "")
+PRIVATE_KEY = os.getenv("PAYER_PRIVATE_KEY", "")
 API_URL = os.getenv("API_URL", "https://agent-api-ai.duckdns.org")
 
 if not PRIVATE_KEY:
-    print("Need PRIVATE_KEY in scripts/.env")
+    print("Need PAYER_PRIVATE_KEY in scripts/.env")
     sys.exit(1)
 
 

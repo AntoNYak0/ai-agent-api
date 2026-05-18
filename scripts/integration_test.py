@@ -158,28 +158,28 @@ def test_well_known_openapi():
 def test_rate_limit():
     """11 rapid-fire POSTs to /api/validate-json — the 11th should 429."""
     results = []
+    last_429_body = {}
     for i in range(11):
         st, hdrs, body = _req(
             "POST",
             f"{BASE}/api/validate-json",
             data={"data": f'{{"seq": {i}}}'},
         )
-        results.append(st)
+        results.append((st, hdrs, body))
         if st == 429:
-            break
+            last_429_body = body if isinstance(body, dict) else {}
 
     # At least one request should be rate-limited
-    rate_limited_count = sum(1 for r in results if r == 429)
+    rate_limited_count = sum(1 for r in results if r[0] == 429)
     assert rate_limited_count >= 1, (
-        f"Expected at least one 429 among {len(results)} requests, got codes: {results}"
+        f"Expected at least one 429 among {len(results)} requests, got codes: {[r[0] for r in results]}"
     )
 
-    # Verify retry_after in body or headers of the 429 response
-    last_st, last_hdrs, last_body = results[-1] if len(results) > 1 else (429, {}, {})
-    # The 429 response has "retry_after_seconds" in the body
-    if isinstance(last_body, dict) and "retry_after_seconds" in last_body:
-        print(f"    (rate limit retry_after={last_body['retry_after_seconds']}s)")
-    # If the last request was NOT 429 (e.g., some got through), no concern
+    # Verify retry_after in body of the 429 response
+    if last_429_body and "retry_after_seconds" in last_429_body:
+        print(f"    (rate limit retry_after={last_429_body['retry_after_seconds']}s)")
+
+    return last_429_body.get("retry_after_seconds", 60)
 
 
 # ── 6-21. Sixteen POST endpoints → 402 ────────────────────────
@@ -361,11 +361,13 @@ def main():
     # ── Phase 2: Rate limiting (early, before other API calls consume quota) ──
     print("\n── Phase 2: Rate Limiting ──")
     print("  (11 rapid POST /api/validate-json — expect 429 on 11th)")
-    test("Rate limiting (11x POST /api/validate-json)", test_rate_limit)
+    retry_after = test_rate_limit()
+    print(f"  PASS Rate limiting: retry_after={retry_after}s")
 
     # Wait for rate-limit window to reset so remaining tests don't false-429
-    print("\n  Waiting 60s for rate-limit window to reset...")
-    for remaining in range(60, 0, -1):
+    wait_seconds = max(retry_after, 10) if isinstance(retry_after, (int, float)) else 60
+    print(f"\n  Waiting {wait_seconds}s for rate-limit window to reset...")
+    for remaining in range(wait_seconds, 0, -1):
         sys.stdout.write(f"\r  {remaining}s remaining...")
         sys.stdout.flush()
         time.sleep(1)

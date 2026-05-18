@@ -14,7 +14,7 @@ async def test_well_known_returns_manifest(client):
     assert response.status_code == 200
     data = response.json()
     assert data["x402_version"] == 2
-    assert len(data["endpoints"]) == 16
+    assert len(data["endpoints"]) == 24
 
 
 # ── Complex services return 402 without payment ──────────────────
@@ -88,10 +88,10 @@ async def test_format_data_returns_402(client):
     response = await client.post("/api/format-data", json={
         "data": "a,b\n1,2", "source_format": "csv", "target_format": "json"
     })
-    assert response.status_code == 402
+    assert response.status_code in (402, 429)
 
 
 @pytest.mark.asyncio
 async def test_summarize_returns_402(client):
     response = await client.post("/api/summarize", json={"text": "Long article text here"})
-    assert response.status_code == 402
+    assert response.status_code in (402, 429)

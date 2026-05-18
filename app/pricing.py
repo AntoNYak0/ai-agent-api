@@ -209,6 +209,15 @@ AI_UPTO_SERVICES = {
         "input": {"token": "string"},
         "output": {"token": "string", "estimated_price_range": "string", "support_zones": "[...]", "resistance_zones": "[...]", "sentiment": "bullish|bearish|neutral", "analysis": "string", "disclaimer": "Training data only. Not financial advice."},
     },
+    "debug_log": {
+        "path": "/api/debug-log",
+        "description": "CI/CD error log analysis — root cause and fix suggestions",
+        "max_price": "$0.03",
+        "base_microunits": 10_000,
+        "min_price_microunits": 5_000,
+        "input": {"log": "string", "context": "string (optional)"},
+        "output": {"error_type": "string", "root_cause": "string", "fix": "string", "code_fix": "string", "prevention": "string"},
+    },
 }
 
 EXACT_SERVICES = {
@@ -253,14 +262,6 @@ EXACT_SERVICES = {
         "microunits": 3000,
         "input": {"data": "string", "source_format": "csv|json|yaml", "target_format": "csv|json|yaml"},
         "output": {"converted": "string", "format": "string", "warnings": "[string]"},
-    },
-    "debug_log": {
-        "path": "/api/debug-log",
-        "description": "CI/CD error log analysis — root cause and fix suggestions",
-        "price": "$0.003",
-        "microunits": 3000,
-        "input": {"log": "string", "context": "string (optional)"},
-        "output": {"error_type": "string", "root_cause": "string", "fix": "string", "code_fix": "string", "prevention": "string"},
     },
     "summarize": {
         "path": "/api/summarize",

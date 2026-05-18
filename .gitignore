@@ -8,3 +8,4 @@ venv/
 dist/
 .pytest_cache/
 headers.txt
+logs/

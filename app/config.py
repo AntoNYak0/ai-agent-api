@@ -12,8 +12,12 @@ class Settings(BaseSettings):
     pay_to_address_tron: str | None = None
     pay_to_address_solana: str | None = None
 
-    # x402 facilitator
-    facilitator_url: str = "https://x402.dexter.cash"
+    # x402 facilitator — "payai" (recommended, no KYC), "cdp" (Coinbase, needs KYC), "direct" (Sovereign Mode)
+    facilitator_mode: str = "payai"  # "payai" | "cdp" | "direct"
+
+    # CDP Facilitator credentials (only needed when facilitator_mode="cdp")
+    cdp_api_key_id: str = ""
+    cdp_api_key_secret: str = ""
 
     # App mode
     testnet: bool = True
@@ -22,7 +26,7 @@ class Settings(BaseSettings):
     # Feature flags
     x402_enabled: bool = True  # set to false to bypass payment wall for testing
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 
 settings = Settings()

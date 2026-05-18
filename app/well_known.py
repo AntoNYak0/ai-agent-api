@@ -12,10 +12,13 @@ router = APIRouter()
 # Build lookup dicts for templates
 _SVC = {}
 for name, info in AI_UPTO_SERVICES.items():
+    min_price = info['min_price_microunits'] / 1_000_000
     _SVC[info['path']] = {
         'price': f"${info['base_microunits']/1_000_000:.4f}",
         'scheme': 'upto',
         'maxPrice': info['max_price'],
+        'minPriceMicrounits': info['min_price_microunits'],
+        'maxPriceMicrounits': int(float(info['max_price'].replace('$', '')) * 1_000_000),
         'summary': info['description'],
         'body': info['input'],
         'response': info['output'],
@@ -28,6 +31,33 @@ for name, info in EXACT_SERVICES.items():
         'body': info['input'],
         'response': info['output'],
     }
+
+
+def _display_price(info: dict) -> str:
+    """Format price for display: upto -> '$0.01–$0.05', exact -> '$0.003'."""
+    if info['scheme'] == 'upto':
+        lo = f"${info['minPriceMicrounits'] / 1_000_000:.3f}".rstrip('0').rstrip('.')
+        return f"{lo}–{info['maxPrice']}"
+    return info['price']
+
+
+def _service_category(path: str) -> str:
+    """Map service path to Agentic Market category."""
+    cats = {
+        '/api/audit': 'Infra', '/api/refactor': 'Infra', '/api/docs': 'Infra',
+        '/api/solidity-scan': 'Infra', '/api/agent-audit': 'Infra',
+        '/api/contract-verify': 'Infra', '/api/security-score': 'Infra',
+        '/api/debug-log': 'Infra',
+        '/api/defi-analyze': 'Data', '/api/trading-signal': 'Data',
+        '/api/whale-tracker': 'Data', '/api/smart-money': 'Data',
+        '/api/price-feed': 'Data', '/api/data-feed': 'Data',
+        '/api/nl-to-sql': 'Inference', '/api/sql-to-nl': 'Inference',
+        '/api/git-summarize': 'Inference', '/api/translate-code': 'Inference',
+        '/api/validate-json': 'Infra', '/api/classify-text': 'Inference',
+        '/api/extract-data': 'Data', '/api/generate-regex': 'Infra',
+        '/api/format-data': 'Data', '/api/summarize': 'Inference',
+    }
+    return cats.get(path, 'Inference')
 
 
 def _build_402_response(price: str, scheme: str) -> dict:
@@ -106,12 +136,9 @@ def _build_openapi_spec() -> dict:
             "title": "AI Agent API",
             "version": "2.0.0",
             "description": (
-                "16 pay-per-call AI services via x402 micropayments. "
-                "6 complex (audit, refactor, docs, defi, trading, solidity-scan) + "
-                "4 SQL/dev tools (nl-to-sql, sql-to-nl, git-summarize, translate-code) + "
-                "6 micro-tasks (validate, classify, extract, regex, format, summarize). "
+                f"{len(_SVC)} pay-per-call AI services via x402 micropayments. "
                 "All responses are machine-readable JSON. "
-                "No API keys — pay with USDC on Base/Arbitrum/Optimism or USDT on Tron."
+                "Pay with USDC on Base, Arbitrum, or Optimism."
             ),
             "contact": {
                 "url": GITHUB,
@@ -131,16 +158,28 @@ def _build_openapi_spec() -> dict:
 
 @router.get("/.well-known/x402")
 async def x402_manifest():
+    endpoints = {}
+    for path, info in _SVC.items():
+        endpoints[path] = {
+            "method": "POST",
+            "scheme": info["scheme"],
+            "price": _display_price(info),
+            "description": info["summary"],
+        }
+
+    available_tools = sorted(set(
+        path.replace("/api/", "").replace("-", "_") for path in _SVC
+    ))
+
     return JSONResponse({
         "x402_version": 2,
-        "name": "AI Agent API — 16 pay-per-call services for agent pipelines",
+        "name": f"AI Agent API — {len(_SVC)} pay-per-call services for agent pipelines",
         "description": (
             "AI services on DeepSeek V4 Pro (1M token context). "
-            "Payments via x402 in USDC (Base, Arbitrum, Optimism) and USDT (Tron). "
-            "6 complex services (audit, refactor, docs, defi, trading, solidity-scan) + "
-            "4 SQL/dev tools (nl-to-sql, sql-to-nl, git-summarize, translate-code) + "
-            "6 high-frequency micro-tasks (validate, classify, extract, regex, format, summarize). "
-            "Prices: $0.0005–$0.08 USDC per call. "
+            "Payments via x402 in USDC (Base, Arbitrum, Optimism). "
+            f"{len(_SVC)} services: code audit, refactoring, DeFi analysis, "
+            "Solidity scanner, SQL/NL tools, data feeds, security tools, micro-tasks. "
+            "Prices: $0.0005–$1.00 USDC per call. "
             "All responses are machine-readable JSON."
         ),
         "version": "2.0.0",
@@ -151,121 +190,59 @@ async def x402_manifest():
         "payment": {
             "scheme": "mixed",
             "networks": [
-                {"id": "eip155:8453", "name": "Base", "asset": "USDC"},
-                {"id": "eip155:42161", "name": "Arbitrum", "asset": "USDC"},
-                {"id": "eip155:10", "name": "Optimism", "asset": "USDC"},
-                {"id": "tron:0x2b6653dc", "name": "Tron", "asset": "USDT"},
+                {"caip2": n["caip2"], "name": n["name"], "asset": n["asset"]}
+                for n in NETWORKS if n["caip2"] != "tron:0x2b6653dc"
             ],
         },
-        "endpoints": {
-            "/api/audit": {
-                "method": "POST",
-                "scheme": "upto",
-                "price": "$0.01–$0.05",
-                "description": "Security scan with OWASP Top 10 + SWC Registry taxonomy"
-            },
-            "/api/refactor": {
-                "method": "POST",
-                "scheme": "upto",
-                "price": "$0.01–$0.05",
-                "description": "Refactor legacy code — DRY, SOLID, modern patterns"
-            },
-            "/api/docs": {
-                "method": "POST",
-                "scheme": "upto",
-                "price": "$0.005–$0.03",
-                "description": "Generate technical docs with architecture, signatures, examples"
-            },
-            "/api/defi-analyze": {
-                "method": "POST",
-                "scheme": "upto",
-                "price": "$0.01–$0.04",
-                "description": "DeFi protocol analysis — risks, tokenomics, architecture"
-            },
-            "/api/trading-signal": {
-                "method": "POST",
-                "scheme": "upto",
-                "price": "$0.005–$0.03",
-                "description": "Crypto trading analytics — qualitative, training data only"
-            },
-            "/api/solidity-scan": {
-                "method": "POST",
-                "scheme": "upto",
-                "price": "$0.02–$0.08",
-                "description": "Solidity vulnerability scanner — 36 SWC checks + DeFi exploit patterns"
-            },
-            "/api/nl-to-sql": {
-                "method": "POST",
-                "scheme": "upto",
-                "price": "$0.005–$0.03",
-                "description": "Convert natural language descriptions to SQL queries"
-            },
-            "/api/sql-to-nl": {
-                "method": "POST",
-                "scheme": "upto",
-                "price": "$0.005–$0.02",
-                "description": "Explain SQL queries in plain English"
-            },
-            "/api/git-summarize": {
-                "method": "POST",
-                "scheme": "upto",
-                "price": "$0.005–$0.02",
-                "description": "Summarize git diff into PR description with breaking change detection"
-            },
-            "/api/translate-code": {
-                "method": "POST",
-                "scheme": "upto",
-                "price": "$0.01–$0.05",
-                "description": "Translate code between languages (Python, TS, Rust, Go, Solidity)"
-            },
-            "/api/validate-json": {
-                "method": "POST",
-                "scheme": "exact",
-                "price": "$0.0005",
-                "description": "Validate JSON/YAML structure, schema, types"
-            },
-            "/api/classify-text": {
-                "method": "POST",
-                "scheme": "exact",
-                "price": "$0.001",
-                "description": "Classify text — sentiment, category, keywords, language"
-            },
-            "/api/extract-data": {
-                "method": "POST",
-                "scheme": "exact",
-                "price": "$0.005",
-                "description": "Extract structured data — names, emails, phones, URLs, dates, amounts"
-            },
-            "/api/generate-regex": {
-                "method": "POST",
-                "scheme": "exact",
-                "price": "$0.002",
-                "description": "Generate regex pattern from description with test cases"
-            },
-            "/api/format-data": {
-                "method": "POST",
-                "scheme": "exact",
-                "price": "$0.003",
-                "description": "Convert data between CSV, JSON, YAML formats"
-            },
-            "/api/summarize": {
-                "method": "POST",
-                "scheme": "exact",
-                "price": "$0.002",
-                "description": "Summarize text to N words, extract key points"
-            },
-        },
+        "endpoints": endpoints,
         "mcp": {
             "endpoint": "/mcp/sse",
             "transport": "sse",
-            "available_tools": [
-                "audit", "refactor", "docs", "defi", "trading", "solidity-scan",
-                "nl-to-sql", "sql-to-nl", "git-summarize",
-                "validate-json", "classify-text", "extract-data",
-                "translate-code", "generate-regex", "format-data", "summarize",
-            ],
+            "available_tools": available_tools,
         },
     })
+
+
+@router.get("/.well-known/agentic-market-services.json")
+async def agentic_market_services():
+    """Agentic Market service listing — https://api.agentic.market/v1/services/ compatible schema."""
+    networks_short = ["base", "arbitrum", "optimism"]
+
+    services = []
+    for path, info in sorted(_SVC.items()):
+        name = path.replace("/api/", "").replace("-", " ")
+        tool_id = f"agent-api-{path.replace('/api/', '').replace('-', '_')}"
+
+        # Determine amount: max price for upto, exact price for exact
+        if info['scheme'] == 'upto':
+            amount = info['maxPrice'].replace('$', '')
+        else:
+            amount = info['price'].replace('$', '')
+
+        services.append({
+            "id": tool_id,
+            "name": name.title(),
+            "description": info['summary'],
+            "domain": "agent-api-ai.duckdns.org",
+            "category": _service_category(path),
+            "networks": networks_short,
+            "integrationType": "1P",
+            "isNew": False,
+            "endpoints": [
+                {
+                    "url": f"{DOMAIN}{path}",
+                    "description": info['summary'],
+                    "method": "POST",
+                    "pricing": {
+                        "amount": amount,
+                        "currency": "USDC",
+                        "network": "base",
+                    },
+                }
+            ],
+        })
+
+    return JSONResponse({"services": services})
 
 
 @router.get("/.well-known/openapi.json")
@@ -297,7 +274,7 @@ async def agent_card():
         "schema_version": "1.0",
         "agent_type": "api",
         "name": "AI Agent API",
-        "description": "16 pay-per-call AI services powered by DeepSeek V4 Pro. Payments via x402 protocol.",
+        "description": f"{len(_SVC)} pay-per-call AI services powered by DeepSeek V4 Pro. Payments via x402 protocol.",
         "version": "2.0.0",
         "base_url": DOMAIN,
         "contact": {
@@ -347,7 +324,7 @@ async def mcp_server_card():
         "serverInfo": {
             "name": "ai-agent-api",
             "version": "2.0.0",
-            "description": "16 pay-per-call AI services via x402 USDC — code audit, refactoring, DeFi analysis, Solidity scanner, SQL/NL tools, micro-tasks. Powered by DeepSeek V4 Pro.",
+            "description": f"{len(_SVC)} pay-per-call AI services via x402 USDC — code audit, refactoring, DeFi analysis, Solidity scanner, SQL/NL tools, micro-tasks, security, data feeds. Powered by DeepSeek V4 Pro.",
         },
         "authentication": {
             "required": False,
@@ -372,7 +349,7 @@ async def glama_json():
     return JSONResponse({
         "$schema": "https://glama.ai/mcp/schemas/connector.json",
         "name": "AI Agent API",
-        "description": "16 pay-per-call AI services: code audit, refactoring, DeFi analysis, Solidity scanner, SQL/NL tools, and micro-tasks. Powered by DeepSeek V4 Pro. Payment via x402 USDC.",
+        "description": f"{len(_SVC)} pay-per-call AI services: code audit, refactoring, DeFi analysis, Solidity scanner, SQL/NL tools, micro-tasks, security, data feeds. Powered by DeepSeek V4 Pro. Payment via x402 USDC.",
         "type": "sse",
         "url": f"{DOMAIN}/mcp/sse",
         "auth": {

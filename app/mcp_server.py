@@ -64,7 +64,30 @@ Wallet EVM: 0xdE7eb04faE758055642f67f30D246CcB7136C95E
 """,
 )
 
-if settings.testnet:
+mode = settings.facilitator_mode
+
+if mode == "cdp" and settings.cdp_api_key_id and settings.cdp_api_key_secret:
+    from app.cdp_auth import create_cdp_auth_provider
+    auth_provider = create_cdp_auth_provider(settings.cdp_api_key_id, settings.cdp_api_key_secret)
+    facilitator = HTTPFacilitatorClient(
+        FacilitatorConfig(
+            url="https://api.cdp.coinbase.com/platform/v2/x402",
+            timeout=30.0,
+            auth_provider=auth_provider,
+            identifier="cdp",
+        )
+    )
+    logger.info("MCP: using CDP Facilitator (agentic.market listing enabled)")
+elif mode == "payai":
+    facilitator = HTTPFacilitatorClient(
+        FacilitatorConfig(
+            url="https://facilitator.payai.network",
+            timeout=30.0,
+            identifier="payai",
+        )
+    )
+    logger.info("MCP: using PayAI Facilitator (no KYC, free)")
+elif settings.testnet:
     facilitator = DirectFacilitator(testnet=True, pay_to=settings.pay_to_address_evm)
     logger.info("MCP: using DirectFacilitator (testnet mode)")
 else:
@@ -79,6 +102,13 @@ if settings.pay_to_address_tron:
 
 PAY_TO = settings.pay_to_address_evm
 PAY_TO_TRON = settings.pay_to_address_tron
+
+# Network CAIP-2 → USDC asset contract on each supported chain
+_NETWORK_ASSETS = {
+    "eip155:8453": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",    # Base USDC
+    "eip155:42161": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",   # Arbitrum USDC
+    "eip155:10": "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85",     # Optimism USDC
+}
 
 # Token rate: $0.003 per 1K tokens (DeepSeek cost ~$0.0014/1K, x2 margin)
 PER_1K_TOKENS_MICROUNITS = 3000  # $0.003
@@ -129,7 +159,7 @@ for name, (amount, display) in EXACT_SERVICES.items():
     AMOUNTS[name] = amount
 
 
-async def _verify_payment(payment_tx: str, amount: str, tool_name: str = "unknown", api_key: str = "") -> tuple[bool, str]:
+async def _verify_payment(payment_tx: str, amount: str, tool_name: str = "unknown", api_key: str = "", network: str = "eip155:8453") -> tuple[bool, str]:
     """Verify payment (x402 or API key credits). Returns (is_valid, info_message)."""
     # 1. API key credits (human developers)
     if api_key:
@@ -158,24 +188,31 @@ async def _verify_payment(payment_tx: str, amount: str, tool_name: str = "unknow
     if is_replay(payment_tx, tool_name):
         return False, "Payment already used. Each transaction can only be used once per tool."
 
-    from x402.schemas import PaymentPayload, PaymentRequirements
+    from x402.schemas import PaymentPayload, PaymentRequirements, ResourceInfo
+
+    resource_info = ResourceInfo(
+        url="https://agent-api-ai.duckdns.org/mcp/sse",
+        mime_type="text/event-stream",
+        service_name="AI Agent API MCP",
+    )
 
     payload = PaymentPayload(
         x402_version=2,
         payload={"transactionHash": payment_tx, "payer": "mcp-client"},
         accepted=PaymentRequirements(
             scheme="exact",
-            network="eip155:8453",
-            asset="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+            network=network,
+            asset=_NETWORK_ASSETS.get(network, _NETWORK_ASSETS["eip155:8453"]),
             amount=amount,
             pay_to=PAY_TO,
             max_timeout_seconds=300,
         ),
+        resource=resource_info,
     )
     requirements = PaymentRequirements(
         scheme="exact",
-        network="eip155:8453",
-        asset="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        network=network,
+        asset=_NETWORK_ASSETS.get(network, _NETWORK_ASSETS["eip155:8453"]),
         amount=amount,
         pay_to=PAY_TO,
         max_timeout_seconds=300,
@@ -214,23 +251,29 @@ def _calc_upto_amount(service: str, tokens_used: int) -> int:
     return min(actual, max_amount)
 
 
-async def _settle_payment(payment_tx: str, actual_amount: int):
+async def _settle_payment(payment_tx: str, actual_amount: int, network: str = "eip155:8453"):
     """Settle upto payment with actual usage amount."""
     if settings.testnet:
         return
     try:
-        from x402.schemas import PaymentPayload, PaymentRequirements
+        from x402.schemas import PaymentPayload, PaymentRequirements, ResourceInfo
+        resource_info = ResourceInfo(
+            url="https://agent-api-ai.duckdns.org/mcp/sse",
+            mime_type="text/event-stream",
+            service_name="AI Agent API MCP",
+        )
         payload = PaymentPayload(
             x402_version=2,
             payload={"transactionHash": payment_tx, "payer": "mcp-client"},
             accepted=PaymentRequirements(
                 scheme="exact",
-                network="eip155:8453",
-                asset="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+                network=network,
+                asset=_NETWORK_ASSETS.get(network, _NETWORK_ASSETS["eip155:8453"]),
                 amount=str(actual_amount),
                 pay_to=PAY_TO,
                 max_timeout_seconds=300,
             ),
+            resource=resource_info,
         )
         await facilitator.settle(payload)
     except Exception as e:
@@ -240,8 +283,8 @@ async def _settle_payment(payment_tx: str, actual_amount: int):
 # ── Complex services (upto pricing) ─────────────────────────────
 
 @mcp.tool(name="audit", description=f"Security scan with OWASP + SWC taxonomy. Price: {PRICES['audit']} USDC.")
-async def audit_tool(code: str, context: str = "", payment_tx: str = "", api_key: str = "") -> str:
-    valid, info = await _verify_payment(payment_tx, AMOUNTS["audit"], "audit", api_key)
+async def audit_tool(code: str, context: str = "", payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    valid, info = await _verify_payment(payment_tx, AMOUNTS["audit"], "audit", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('audit')}"
     use_credits = info.startswith("credits:")
@@ -250,13 +293,13 @@ async def audit_tool(code: str, context: str = "", payment_tx: str = "", api_key
     if use_credits:
         credits.spend_credits(api_key, _credits_cost_cents(actual))
     else:
-        await _settle_payment(payment_tx, actual)
+        await _settle_payment(payment_tx, actual, network)
     return result
 
 
 @mcp.tool(name="refactor", description=f"Refactor legacy code (DRY, SOLID). Price: {PRICES['refactor']} USDC.")
-async def refactor_tool(code: str, instructions: str = "", context: str = "", payment_tx: str = "", api_key: str = "") -> str:
-    valid, info = await _verify_payment(payment_tx, AMOUNTS["refactor"], "refactor", api_key)
+async def refactor_tool(code: str, instructions: str = "", context: str = "", payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    valid, info = await _verify_payment(payment_tx, AMOUNTS["refactor"], "refactor", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('refactor')}"
     use_credits = info.startswith("credits:")
@@ -266,13 +309,13 @@ async def refactor_tool(code: str, instructions: str = "", context: str = "", pa
     if use_credits:
         credits.spend_credits(api_key, _credits_cost_cents(actual))
     else:
-        await _settle_payment(payment_tx, actual)
+        await _settle_payment(payment_tx, actual, network)
     return result
 
 
 @mcp.tool(name="docs", description=f"Generate technical docs from code. Price: {PRICES['docs']} USDC.")
-async def docs_tool(code: str, context: str = "", payment_tx: str = "", api_key: str = "") -> str:
-    valid, info = await _verify_payment(payment_tx, AMOUNTS["docs"], "docs", api_key)
+async def docs_tool(code: str, context: str = "", payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    valid, info = await _verify_payment(payment_tx, AMOUNTS["docs"], "docs", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('docs')}"
     use_credits = info.startswith("credits:")
@@ -281,13 +324,13 @@ async def docs_tool(code: str, context: str = "", payment_tx: str = "", api_key:
     if use_credits:
         credits.spend_credits(api_key, _credits_cost_cents(actual))
     else:
-        await _settle_payment(payment_tx, actual)
+        await _settle_payment(payment_tx, actual, network)
     return result
 
 
 @mcp.tool(name="defi", description=f"DeFi protocol analysis. Price: {PRICES['defi']} USDC.")
-async def defi_tool(protocol: str, chain: str = "Ethereum", details: str = "", onchain_data: str = "", payment_tx: str = "", api_key: str = "") -> str:
-    valid, info = await _verify_payment(payment_tx, AMOUNTS["defi"], "defi", api_key)
+async def defi_tool(protocol: str, chain: str = "Ethereum", details: str = "", onchain_data: str = "", payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    valid, info = await _verify_payment(payment_tx, AMOUNTS["defi"], "defi", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('defi')}"
     use_credits = info.startswith("credits:")
@@ -301,13 +344,13 @@ async def defi_tool(protocol: str, chain: str = "Ethereum", details: str = "", o
     if use_credits:
         credits.spend_credits(api_key, _credits_cost_cents(actual))
     else:
-        await _settle_payment(payment_tx, actual)
+        await _settle_payment(payment_tx, actual, network)
     return result
 
 
 @mcp.tool(name="trading", description=f"Crypto trading analytics. Price: {PRICES['trading']} USDC.")
-async def trading_tool(asset: str, timeframe: str = "daily", additional_info: str = "", payment_tx: str = "", api_key: str = "") -> str:
-    valid, info = await _verify_payment(payment_tx, AMOUNTS["trading"], "trading", api_key)
+async def trading_tool(asset: str, timeframe: str = "daily", additional_info: str = "", payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    valid, info = await _verify_payment(payment_tx, AMOUNTS["trading"], "trading", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('trading')}"
     use_credits = info.startswith("credits:")
@@ -319,15 +362,15 @@ async def trading_tool(asset: str, timeframe: str = "daily", additional_info: st
     if use_credits:
         credits.spend_credits(api_key, _credits_cost_cents(actual))
     else:
-        await _settle_payment(payment_tx, actual)
+        await _settle_payment(payment_tx, actual, network)
     return result
 
 
 # ── Solidity scanner (upto pricing) ──────────────────────────────
 
 @mcp.tool(name="solidity-scan", description=f"Solidity vulnerability scanner (SWC Registry). Price: {PRICES['solidity-scan']} USDC.")
-async def solidity_scan_tool(code: str, context: str = "", payment_tx: str = "", api_key: str = "") -> str:
-    valid, info = await _verify_payment(payment_tx, AMOUNTS["solidity-scan"], "solidity-scan", api_key)
+async def solidity_scan_tool(code: str, context: str = "", payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    valid, info = await _verify_payment(payment_tx, AMOUNTS["solidity-scan"], "solidity-scan", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('solidity-scan')}"
     use_credits = info.startswith("credits:")
@@ -336,15 +379,15 @@ async def solidity_scan_tool(code: str, context: str = "", payment_tx: str = "",
     if use_credits:
         credits.spend_credits(api_key, _credits_cost_cents(actual))
     else:
-        await _settle_payment(payment_tx, actual)
+        await _settle_payment(payment_tx, actual, network)
     return result
 
 
 # ── SQL services (upto pricing) ──────────────────────────────────
 
 @mcp.tool(name="nl-to-sql", description=f"Natural language to SQL. Price: {PRICES['nl-to-sql']} USDC.")
-async def nl_to_sql_tool(query: str, payment_tx: str = "", api_key: str = "") -> str:
-    valid, info = await _verify_payment(payment_tx, AMOUNTS["nl-to-sql"], "nl-to-sql", api_key)
+async def nl_to_sql_tool(query: str, payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    valid, info = await _verify_payment(payment_tx, AMOUNTS["nl-to-sql"], "nl-to-sql", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('nl-to-sql')}"
     use_credits = info.startswith("credits:")
@@ -353,13 +396,13 @@ async def nl_to_sql_tool(query: str, payment_tx: str = "", api_key: str = "") ->
     if use_credits:
         credits.spend_credits(api_key, _credits_cost_cents(actual))
     else:
-        await _settle_payment(payment_tx, actual)
+        await _settle_payment(payment_tx, actual, network)
     return result
 
 
 @mcp.tool(name="sql-to-nl", description=f"SQL to plain English explanation. Price: {PRICES['sql-to-nl']} USDC.")
-async def sql_to_nl_tool(sql: str, payment_tx: str = "", api_key: str = "") -> str:
-    valid, info = await _verify_payment(payment_tx, AMOUNTS["sql-to-nl"], "sql-to-nl", api_key)
+async def sql_to_nl_tool(sql: str, payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    valid, info = await _verify_payment(payment_tx, AMOUNTS["sql-to-nl"], "sql-to-nl", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('sql-to-nl')}"
     use_credits = info.startswith("credits:")
@@ -368,15 +411,15 @@ async def sql_to_nl_tool(sql: str, payment_tx: str = "", api_key: str = "") -> s
     if use_credits:
         credits.spend_credits(api_key, _credits_cost_cents(actual))
     else:
-        await _settle_payment(payment_tx, actual)
+        await _settle_payment(payment_tx, actual, network)
     return result
 
 
 # ── Dev tools (upto pricing) ─────────────────────────────────────
 
 @mcp.tool(name="git-summarize", description=f"Git diff to PR description. Price: {PRICES['git-summarize']} USDC.")
-async def git_summarize_tool(diff: str, payment_tx: str = "", api_key: str = "") -> str:
-    valid, info = await _verify_payment(payment_tx, AMOUNTS["git-summarize"], "git-summarize", api_key)
+async def git_summarize_tool(diff: str, payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    valid, info = await _verify_payment(payment_tx, AMOUNTS["git-summarize"], "git-summarize", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('git-summarize')}"
     use_credits = info.startswith("credits:")
@@ -385,13 +428,13 @@ async def git_summarize_tool(diff: str, payment_tx: str = "", api_key: str = "")
     if use_credits:
         credits.spend_credits(api_key, _credits_cost_cents(actual))
     else:
-        await _settle_payment(payment_tx, actual)
+        await _settle_payment(payment_tx, actual, network)
     return result
 
 
 @mcp.tool(name="translate-code", description=f"Translate code between languages. Price: {PRICES['translate-code']} USDC.")
-async def translate_code_tool(code: str, source_lang: str, target_lang: str, payment_tx: str = "", api_key: str = "") -> str:
-    valid, info = await _verify_payment(payment_tx, AMOUNTS["translate-code"], "translate-code", api_key)
+async def translate_code_tool(code: str, source_lang: str, target_lang: str, payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    valid, info = await _verify_payment(payment_tx, AMOUNTS["translate-code"], "translate-code", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('translate-code')}"
     use_credits = info.startswith("credits:")
@@ -401,15 +444,15 @@ async def translate_code_tool(code: str, source_lang: str, target_lang: str, pay
     if use_credits:
         credits.spend_credits(api_key, _credits_cost_cents(actual))
     else:
-        await _settle_payment(payment_tx, actual)
+        await _settle_payment(payment_tx, actual, network)
     return result
 
 
 # ── Micro-tasks (exact pricing) ──────────────────────────────────
 
 @mcp.tool(name="validate-json", description=f"Validate JSON/YAML structure. Price: {PRICES['validate-json']} USDC.")
-async def validate_json_tool(data: str, schema: str = "", payment_tx: str = "", api_key: str = "") -> str:
-    valid, info = await _verify_payment(payment_tx, AMOUNTS["validate-json"], "validate-json", api_key)
+async def validate_json_tool(data: str, schema: str = "", payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    valid, info = await _verify_payment(payment_tx, AMOUNTS["validate-json"], "validate-json", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('validate-json')}"
     use_credits = info.startswith("credits:")
@@ -418,13 +461,13 @@ async def validate_json_tool(data: str, schema: str = "", payment_tx: str = "", 
     if use_credits:
         credits.spend_credits(api_key, _credits_cost_cents(int(AMOUNTS["validate-json"])))
     else:
-        await _settle_payment(payment_tx, int(AMOUNTS["validate-json"]))
+        await _settle_payment(payment_tx, int(AMOUNTS["validate-json"]), network)
     return result
 
 
 @mcp.tool(name="classify-text", description=f"Classify text sentiment/category. Price: {PRICES['classify-text']} USDC.")
-async def classify_text_tool(text: str, categories: str = "", payment_tx: str = "", api_key: str = "") -> str:
-    valid, info = await _verify_payment(payment_tx, AMOUNTS["classify-text"], "classify-text", api_key)
+async def classify_text_tool(text: str, categories: str = "", payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    valid, info = await _verify_payment(payment_tx, AMOUNTS["classify-text"], "classify-text", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('classify-text')}"
     use_credits = info.startswith("credits:")
@@ -433,13 +476,13 @@ async def classify_text_tool(text: str, categories: str = "", payment_tx: str = 
     if use_credits:
         credits.spend_credits(api_key, _credits_cost_cents(int(AMOUNTS["classify-text"])))
     else:
-        await _settle_payment(payment_tx, int(AMOUNTS["classify-text"]))
+        await _settle_payment(payment_tx, int(AMOUNTS["classify-text"]), network)
     return result
 
 
 @mcp.tool(name="extract-data", description=f"Extract structured data from text. Price: {PRICES['extract-data']} USDC.")
-async def extract_data_tool(text: str, payment_tx: str = "", api_key: str = "") -> str:
-    valid, info = await _verify_payment(payment_tx, AMOUNTS["extract-data"], "extract-data", api_key)
+async def extract_data_tool(text: str, payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    valid, info = await _verify_payment(payment_tx, AMOUNTS["extract-data"], "extract-data", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('extract-data')}"
     use_credits = info.startswith("credits:")
@@ -447,13 +490,13 @@ async def extract_data_tool(text: str, payment_tx: str = "", api_key: str = "") 
     if use_credits:
         credits.spend_credits(api_key, _credits_cost_cents(int(AMOUNTS["extract-data"])))
     else:
-        await _settle_payment(payment_tx, int(AMOUNTS["extract-data"]))
+        await _settle_payment(payment_tx, int(AMOUNTS["extract-data"]), network)
     return result
 
 
 @mcp.tool(name="generate-regex", description=f"Generate regex from description. Price: {PRICES['generate-regex']} USDC.")
-async def generate_regex_tool(description: str, payment_tx: str = "", api_key: str = "") -> str:
-    valid, info = await _verify_payment(payment_tx, AMOUNTS["generate-regex"], "generate-regex", api_key)
+async def generate_regex_tool(description: str, payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    valid, info = await _verify_payment(payment_tx, AMOUNTS["generate-regex"], "generate-regex", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('generate-regex')}"
     use_credits = info.startswith("credits:")
@@ -461,13 +504,13 @@ async def generate_regex_tool(description: str, payment_tx: str = "", api_key: s
     if use_credits:
         credits.spend_credits(api_key, _credits_cost_cents(int(AMOUNTS["generate-regex"])))
     else:
-        await _settle_payment(payment_tx, int(AMOUNTS["generate-regex"]))
+        await _settle_payment(payment_tx, int(AMOUNTS["generate-regex"]), network)
     return result
 
 
 @mcp.tool(name="format-data", description=f"Convert data CSV/JSON/YAML. Price: {PRICES['format-data']} USDC.")
-async def format_data_tool(data: str, source_format: str, target_format: str, payment_tx: str = "", api_key: str = "") -> str:
-    valid, info = await _verify_payment(payment_tx, AMOUNTS["format-data"], "format-data", api_key)
+async def format_data_tool(data: str, source_format: str, target_format: str, payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    valid, info = await _verify_payment(payment_tx, AMOUNTS["format-data"], "format-data", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('format-data')}"
     use_credits = info.startswith("credits:")
@@ -476,13 +519,13 @@ async def format_data_tool(data: str, source_format: str, target_format: str, pa
     if use_credits:
         credits.spend_credits(api_key, _credits_cost_cents(int(AMOUNTS["format-data"])))
     else:
-        await _settle_payment(payment_tx, int(AMOUNTS["format-data"]))
+        await _settle_payment(payment_tx, int(AMOUNTS["format-data"]), network)
     return result
 
 
 @mcp.tool(name="summarize", description=f"Summarize text to N words. Price: {PRICES['summarize']} USDC.")
-async def summarize_tool(text: str, max_length: int = 100, payment_tx: str = "", api_key: str = "") -> str:
-    valid, info = await _verify_payment(payment_tx, AMOUNTS["summarize"], "summarize", api_key)
+async def summarize_tool(text: str, max_length: int = 100, payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    valid, info = await _verify_payment(payment_tx, AMOUNTS["summarize"], "summarize", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('summarize')}"
     use_credits = info.startswith("credits:")
@@ -491,7 +534,7 @@ async def summarize_tool(text: str, max_length: int = 100, payment_tx: str = "",
     if use_credits:
         credits.spend_credits(api_key, _credits_cost_cents(int(AMOUNTS["summarize"])))
     else:
-        await _settle_payment(payment_tx, int(AMOUNTS["summarize"]))
+        await _settle_payment(payment_tx, int(AMOUNTS["summarize"]), network)
     return result
 
 
@@ -502,8 +545,8 @@ _skill_prices = {"defi-research": 80000, "code-health-check": 100000,
 
 
 @mcp.tool(name="defi-research", description="Full DeFi research: extract on-chain data → analyze protocol → summarize. Price: $0.08 USDC.")
-async def defi_research_tool(protocol: str, chain: str = "ethereum", onchain_data: str = "", payment_tx: str = "", api_key: str = "") -> str:
-    valid, info = await _verify_payment(payment_tx, _skill_prices["defi-research"], "defi-research", api_key)
+async def defi_research_tool(protocol: str, chain: str = "ethereum", onchain_data: str = "", payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    valid, info = await _verify_payment(payment_tx, _skill_prices["defi-research"], "defi-research", api_key, network)
     if not valid:
         return f"Payment required: {info}"
     use_credits = info.startswith("credits:")
@@ -519,8 +562,8 @@ async def defi_research_tool(protocol: str, chain: str = "ethereum", onchain_dat
 
 
 @mcp.tool(name="code-health-check", description="Complete code health: security audit → refactor → generate docs. Price: $0.10 USDC.")
-async def code_health_check_tool(code: str, instructions: str = "", payment_tx: str = "", api_key: str = "") -> str:
-    valid, info = await _verify_payment(payment_tx, _skill_prices["code-health-check"], "code-health-check", api_key)
+async def code_health_check_tool(code: str, instructions: str = "", payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    valid, info = await _verify_payment(payment_tx, _skill_prices["code-health-check"], "code-health-check", api_key, network)
     if not valid:
         return f"Payment required: {info}"
     use_credits = info.startswith("credits:")
@@ -533,8 +576,8 @@ async def code_health_check_tool(code: str, instructions: str = "", payment_tx: 
 
 
 @mcp.tool(name="smart-contract-audit", description="Solidity audit + documentation: scan vulnerabilities → generate audit report. Price: $0.10 USDC.")
-async def smart_contract_audit_tool(code: str, payment_tx: str = "", api_key: str = "") -> str:
-    valid, info = await _verify_payment(payment_tx, _skill_prices["smart-contract-audit"], "smart-contract-audit", api_key)
+async def smart_contract_audit_tool(code: str, payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    valid, info = await _verify_payment(payment_tx, _skill_prices["smart-contract-audit"], "smart-contract-audit", api_key, network)
     if not valid:
         return f"Payment required: {info}"
     use_credits = info.startswith("credits:")
@@ -546,8 +589,8 @@ async def smart_contract_audit_tool(code: str, payment_tx: str = "", api_key: st
 
 
 @mcp.tool(name="data-pipeline", description="Data processing pipeline: extract entities → convert format → summarize. Price: $0.05 USDC.")
-async def data_pipeline_tool(text: str, target_format: str = "json", payment_tx: str = "", api_key: str = "") -> str:
-    valid, info = await _verify_payment(payment_tx, _skill_prices["data-pipeline"], "data-pipeline", api_key)
+async def data_pipeline_tool(text: str, target_format: str = "json", payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    valid, info = await _verify_payment(payment_tx, _skill_prices["data-pipeline"], "data-pipeline", api_key, network)
     if not valid:
         return f"Payment required: {info}"
     use_credits = info.startswith("credits:")
