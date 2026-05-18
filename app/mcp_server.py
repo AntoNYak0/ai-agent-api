@@ -275,7 +275,7 @@ async def _settle_payment(payment_tx: str, actual_amount: int, network: str = "e
             ),
             resource=resource_info,
         )
-        await facilitator.settle(payload)
+        await facilitator.settle(payload, payload.accepted)
     except Exception as e:
         logger.warning(f"Settle failed (non-critical): {e}")
 
