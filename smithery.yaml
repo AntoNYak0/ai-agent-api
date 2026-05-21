@@ -1,0 +1,117 @@
+# Smithery.ai server configuration
+# Auto-discovered by Smithery when this repo is connected
+# https://smithery.ai/docs/build/publish
+
+name: ai-agent-api
+version: "2.0.0"
+description: >
+  20 pay-per-call AI services via x402 USDC micropayments.
+  Code audit, refactoring, DeFi analysis, Solidity scanner,
+  SQL/NL tools, micro-tasks, and composite workflows.
+  Powered by DeepSeek V4 Pro (1M context).
+  No API key needed — agents pay per call in USDC.
+
+transport:
+  type: sse
+  url: https://agent-api-ai.duckdns.org/mcp/sse
+
+authentication:
+  required: false
+  schemes:
+    - x402
+  description: >
+    No API key. Pay per call in USDC via x402 on Base, Arbitrum, or Optimism.
+    Send USDC to 0xdE7eb04faE758055642f67f30D246CcB7136C95E,
+    then pass payment_tx=<hash> with each tool call.
+
+tools:
+  # AI Services (upto pricing)
+  - name: audit
+    description: Security scan with OWASP Top 10 + SWC Registry taxonomy
+    pricing: $0.01-$0.05 USDC
+
+  - name: refactor
+    description: Refactor legacy code — DRY, SOLID, modern patterns
+    pricing: $0.01-$0.05 USDC
+
+  - name: docs
+    description: Generate technical documentation from code
+    pricing: $0.005-$0.03 USDC
+
+  - name: defi
+    description: DeFi protocol analysis — risks, tokenomics, architecture
+    pricing: $0.01-$0.04 USDC
+
+  - name: trading
+    description: Crypto market analysis — qualitative, NOT financial advice
+    pricing: $0.005-$0.03 USDC
+
+  - name: solidity-scan
+    description: Solidity vulnerability scanner — 36 SWC checks + DeFi exploits
+    pricing: $0.02-$0.08 USDC
+
+  - name: nl-to-sql
+    description: Convert natural language to SQL query
+    pricing: $0.005-$0.03 USDC
+
+  - name: sql-to-nl
+    description: Explain SQL query in plain English
+    pricing: $0.005-$0.02 USDC
+
+  - name: git-summarize
+    description: Summarize git diff into PR description
+    pricing: $0.005-$0.02 USDC
+
+  - name: translate-code
+    description: Translate code between languages (Python, TS, Rust, Go, Solidity)
+    pricing: $0.01-$0.05 USDC
+
+  # Micro-tasks (exact pricing)
+  - name: validate-json
+    description: Validate JSON/YAML structure, schema, types
+    pricing: $0.0005 USDC
+
+  - name: classify-text
+    description: Classify text — sentiment, category, keywords, language
+    pricing: $0.001 USDC
+
+  - name: extract-data
+    description: Extract structured data — names, emails, phones, URLs, dates
+    pricing: $0.005 USDC
+
+  - name: generate-regex
+    description: Generate regex pattern from description with test cases
+    pricing: $0.002 USDC
+
+  - name: format-data
+    description: Convert data between CSV, JSON, YAML formats
+    pricing: $0.003 USDC
+
+  - name: summarize
+    description: Summarize text to N words, extract key points
+    pricing: $0.002 USDC
+
+  # Composite Skills
+  - name: defi-research
+    description: Full DeFi research pipeline — extract data, analyze protocol, summarize
+    pricing: $0.08 USDC
+
+  - name: code-health-check
+    description: Complete code health — audit, refactor, generate docs
+    pricing: $0.10 USDC
+
+  - name: smart-contract-audit
+    description: Solidity audit + documentation — scan vulnerabilities, generate report
+    pricing: $0.10 USDC
+
+  - name: data-pipeline
+    description: Data processing pipeline — extract entities, convert format, summarize
+    pricing: $0.05 USDC
+
+contact:
+  email: admin@agent-api-ai.duckdns.org
+  github: https://github.com/AntoNYak0/ai-agent-api
+
+repository: https://github.com/AntoNYak0/ai-agent-api
+homepage: https://agent-api-ai.duckdns.org
+license: MIT

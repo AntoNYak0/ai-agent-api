@@ -1,0 +1,50 @@
+{
+  "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/specification/main/schema/mcp.json",
+  "name": "ai-agent-api",
+  "version": "2.0.0",
+  "description": "20 pay-per-call AI services via x402 USDC micropayments — code audit, refactoring, DeFi analysis, Solidity scanner, SQL/NL tools, micro-tasks, composite workflows. Powered by DeepSeek V4 Pro.",
+  "transport": {
+    "type": "sse",
+    "url": "https://agent-api-ai.duckdns.org/mcp/sse"
+  },
+  "authentication": {
+    "type": "x402",
+    "description": "Pay per call in USDC via x402 on Base, Arbitrum, Optimism. Send USDC to 0xdE7eb04faE758055642f67f30D246CcB7136C95E, pass payment_tx=<hash> with each call."
+  },
+  "pricing": {
+    "currency": "USDC",
+    "networks": ["base", "arbitrum", "optimism"],
+    "wallet": "0xdE7eb04faE758055642f67f30D246CcB7136C95E",
+    "range": "$0.0005–$0.10 USD"
+  },
+  "tools": [
+    {"name": "audit", "pricing": "$0.01–$0.05", "category": "security"},
+    {"name": "refactor", "pricing": "$0.01–$0.05", "category": "code-quality"},
+    {"name": "docs", "pricing": "$0.005–$0.03", "category": "code-quality"},
+    {"name": "defi", "pricing": "$0.01–$0.04", "category": "defi"},
+    {"name": "trading", "pricing": "$0.005–$0.03", "category": "defi"},
+    {"name": "solidity-scan", "pricing": "$0.02–$0.08", "category": "security"},
+    {"name": "nl-to-sql", "pricing": "$0.005–$0.03", "category": "sql"},
+    {"name": "sql-to-nl", "pricing": "$0.005–$0.02", "category": "sql"},
+    {"name": "git-summarize", "pricing": "$0.005–$0.02", "category": "dev-tools"},
+    {"name": "translate-code", "pricing": "$0.01–$0.05", "category": "dev-tools"},
+    {"name": "validate-json", "pricing": "$0.0005", "category": "micro"},
+    {"name": "classify-text", "pricing": "$0.001", "category": "micro"},
+    {"name": "extract-data", "pricing": "$0.005", "category": "micro"},
+    {"name": "generate-regex", "pricing": "$0.002", "category": "micro"},
+    {"name": "format-data", "pricing": "$0.003", "category": "micro"},
+    {"name": "summarize", "pricing": "$0.002", "category": "micro"},
+    {"name": "defi-research", "pricing": "$0.08", "category": "composite"},
+    {"name": "code-health-check", "pricing": "$0.10", "category": "composite"},
+    {"name": "smart-contract-audit", "pricing": "$0.10", "category": "composite"},
+    {"name": "data-pipeline", "pricing": "$0.05", "category": "composite"}
+  ],
+  "contact": {
+    "email": "admin@agent-api-ai.duckdns.org",
+    "github": "https://github.com/AntoNYak0/ai-agent-api"
+  },
+  "homepage": "https://agent-api-ai.duckdns.org",
+  "repository": "https://github.com/AntoNYak0/ai-agent-api",
+  "license": "MIT",
+  "keywords": ["ai", "code-audit", "solidity", "defi", "sql", "microtasks", "x402", "usdc"]
+}

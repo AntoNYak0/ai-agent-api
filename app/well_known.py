@@ -177,9 +177,14 @@ async def x402_manifest():
         "defi-research", "code-health-check", "smart-contract-audit", "data-pipeline",
     ]
 
+    # Build resource URLs for x402scan compatibility
+    resources = [f"{DOMAIN}{path}" for path in sorted(_SVC.keys())]
+
     return JSONResponse({
         "x402_version": 2,
+        "version": 2,
         "name": f"AI Agent API — {len(_SVC)} pay-per-call services for agent pipelines",
+        "resources": resources,
         "description": (
             "AI services on DeepSeek V4 Pro (1M token context). "
             "Payments via x402 in USDC (Base, Arbitrum, Optimism). "
@@ -364,6 +369,122 @@ async def glama_json():
         },
         "maintainers": [{"email": "admin@agent-api-ai.duckdns.org"}],
         "homepage": DOMAIN,
+        "repository": GITHUB,
+        "license": "MIT",
+    })
+
+
+@router.get("/.well-known/agentictrade.json")
+async def agentictrade_json():
+    """AgenticTrade marketplace listing — https://agentictrade.io provider discovery."""
+    tools = []
+    for path, info in _SVC.items():
+        name = path.replace("/api/", "").replace("-", "_")
+        tools.append({
+            "name": name,
+            "description": info["summary"],
+            "scheme": info["scheme"],
+            "price": _display_price(info),
+        })
+
+    return JSONResponse({
+        "name": "AI Agent API",
+        "version": "2.0.0",
+        "description": (
+            f"{len(_SVC)} pay-per-call AI services via x402 USDC micropayments. "
+            "Code audit, refactoring, DeFi analysis, Solidity scanner, "
+            "SQL/NL tools, micro-tasks, security, data feeds, composite workflows. "
+            "Powered by DeepSeek V4 Pro (1M context)."
+        ),
+        "endpoint": DOMAIN,
+        "mcp_transport": "sse",
+        "mcp_url": f"{DOMAIN}/mcp/sse",
+        "payment": {
+            "protocol": "x402",
+            "currency": "USDC",
+            "networks": ["base", "arbitrum", "optimism"],
+            "wallet": WALLET,
+            "price_range": "$0.0005–$1.00 USD",
+        },
+        "tools": tools,
+        "contact": {
+            "email": "admin@agent-api-ai.duckdns.org",
+            "github": GITHUB,
+        },
+        "repository": GITHUB,
+        "license": "MIT",
+    })
+
+
+@router.get("/.well-known/agent.json")
+async def agent_json():
+    """AP2 (Agent Payments Protocol) discovery — A2A Agent Card with payments block.
+    https://agentpaymentsprotocol.info/specification/discovery/
+    """
+    skills = []
+    for path, info in _SVC.items():
+        name = path.replace("/api/", "").replace("-", "_")
+        skills.append({
+            "id": name,
+            "name": name.replace("_", " ").title(),
+            "description": info["summary"],
+            "tags": [name, info["scheme"]],
+            "input": info["body"],
+            "output": info["response"],
+        })
+
+    return JSONResponse({
+        "name": "AI Agent API",
+        "url": DOMAIN,
+        "version": "2.0.0",
+        "description": (
+            f"{len(_SVC)} pay-per-call AI services via x402 USDC micropayments. "
+            "Code audit, refactoring, DeFi analysis, Solidity scanner, "
+            "SQL/NL tools, micro-tasks, composite workflows. "
+            "Powered by DeepSeek V4 Pro (1M context)."
+        ),
+        "capabilities": {
+            "streaming": False,
+            "mcp": True,
+            "pushNotifications": False,
+        },
+        "payments": {
+            "version": "2025.0",
+            "rails": [
+                {
+                    "id": "x402",
+                    "currencies": ["USDC"],
+                    "captureTypes": ["immediate_capture", "usage_metered"],
+                    "jurisdictions": ["WW"],
+                    "policy": f"{DOMAIN}/.well-known/x402",
+                    "fees": {
+                        "processing": "0%",
+                        "refund": "0 USD",
+                    },
+                }
+            ],
+            "pricing": {
+                "model": "catalog",
+                "catalogUrl": f"{DOMAIN}/.well-known/x402",
+            },
+            "contact": {
+                "operations": "admin@agent-api-ai.duckdns.org",
+                "disputes": "admin@agent-api-ai.duckdns.org",
+            },
+        },
+        "mcp": {
+            "endpoint": "/mcp/sse",
+            "transport": "sse",
+        },
+        "authentication": {
+            "required": False,
+            "schemes": ["x402"],
+        },
+        "skills": skills,
+        "contact": {
+            "email": "admin@agent-api-ai.duckdns.org",
+            "github": GITHUB,
+        },
         "repository": GITHUB,
         "license": "MIT",
     })
