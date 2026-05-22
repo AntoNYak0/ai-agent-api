@@ -75,4 +75,5 @@ Protocol: MCP (Model Context Protocol)
 - `/.well-known/mcp/server-card.json` — Smithery server card
 - `/.well-known/glama.json` — Glama auto-discovery
 - `/.well-known/agent-card.json` — A2A agent card
-- `/.well-known/agentictrade.json` — AgenticTrade marketplace listing
+- `/.well-known/agentic-market-services.json` — agentic.market listing
+- `/.well-known/agent.json` — AP2 (Agent Payments Protocol) discovery

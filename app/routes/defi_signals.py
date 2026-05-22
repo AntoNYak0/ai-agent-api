@@ -43,16 +43,21 @@ async def whale_tracker(request: Request, body: WhaleTrackerRequest):
     if not ok:
         return JSONResponse(status_code=402, content=err, headers={"PAYMENT-REQUIRED": "true"})
 
+    is_api_key = hasattr(request.state, "human_api_key")
+    if is_api_key:
+        cost_cents = round_up_cents((WHALE_BASE / 10000) * CREDIT_MULTIPLIER)
+        balance = credits.get_balance(request.state.human_api_key)
+        if not balance or (balance["credits"] / 10) < cost_cents:
+            analytics.track("whale-tracker", "api_key", False, 0, 0)
+            return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
+
     content = f"Asset: {body.asset}\nWallet: {body.wallet_address or 'auto-detect'}\nTimeframe: {body.timeframe or '24h'}"
     result, tokens = await cached_completion("whale-tracker", content, WHALE_TRACKER_PROMPT, None, json_mode=True)
 
-    is_api_key = hasattr(request.state, "human_api_key")
     microunits = WHALE_BASE + int((tokens / 1000) * 3000)
     if is_api_key:
         cost_cents = round_up_cents((microunits / 10000) * CREDIT_MULTIPLIER)
-        ok = credits.spend_credits(request.state.human_api_key, cost_cents)
-        if not ok:
-            return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
+        credits.spend_credits(request.state.human_api_key, cost_cents)
         analytics.track("whale-tracker", "api_key", True, tokens, cost_cents / 100)
     else:
         await settle_actual_usage(request, microunits)
@@ -67,16 +72,21 @@ async def smart_money(request: Request, body: SmartMoneyRequest):
     if not ok:
         return JSONResponse(status_code=402, content=err, headers={"PAYMENT-REQUIRED": "true"})
 
+    is_api_key = hasattr(request.state, "human_api_key")
+    if is_api_key:
+        cost_cents = round_up_cents((SMART_BASE / 10000) * CREDIT_MULTIPLIER)
+        balance = credits.get_balance(request.state.human_api_key)
+        if not balance or (balance["credits"] / 10) < cost_cents:
+            analytics.track("smart-money", "api_key", False, 0, 0)
+            return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
+
     content = f"Wallet: {body.wallet_address}\nChain: {body.chain or 'ethereum'}"
     result, tokens = await cached_completion("smart-money", content, SMART_MONEY_PROMPT, None, json_mode=True)
 
-    is_api_key = hasattr(request.state, "human_api_key")
     microunits = SMART_BASE + int((tokens / 1000) * 3000)
     if is_api_key:
         cost_cents = round_up_cents((microunits / 10000) * CREDIT_MULTIPLIER)
-        ok = credits.spend_credits(request.state.human_api_key, cost_cents)
-        if not ok:
-            return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
+        credits.spend_credits(request.state.human_api_key, cost_cents)
         analytics.track("smart-money", "api_key", True, tokens, cost_cents / 100)
     else:
         await settle_actual_usage(request, microunits)
@@ -91,16 +101,21 @@ async def price_feed(request: Request, body: PriceFeedRequest):
     if not ok:
         return JSONResponse(status_code=402, content=err, headers={"PAYMENT-REQUIRED": "true"})
 
+    is_api_key = hasattr(request.state, "human_api_key")
+    if is_api_key:
+        cost_cents = round_up_cents((PRICE_BASE / 10000) * CREDIT_MULTIPLIER)
+        balance = credits.get_balance(request.state.human_api_key)
+        if not balance or (balance["credits"] / 10) < cost_cents:
+            analytics.track("price-feed", "api_key", False, 0, 0)
+            return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
+
     content = f"Token: {body.token}"
     result, tokens = await cached_completion("price-feed", content, PRICE_FEED_PROMPT, None, json_mode=True)
 
-    is_api_key = hasattr(request.state, "human_api_key")
     microunits = PRICE_BASE + int((tokens / 1000) * 3000)
     if is_api_key:
         cost_cents = round_up_cents((microunits / 10000) * CREDIT_MULTIPLIER)
-        ok = credits.spend_credits(request.state.human_api_key, cost_cents)
-        if not ok:
-            return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
+        credits.spend_credits(request.state.human_api_key, cost_cents)
         analytics.track("price-feed", "api_key", True, tokens, cost_cents / 100)
     else:
         await settle_actual_usage(request, microunits)

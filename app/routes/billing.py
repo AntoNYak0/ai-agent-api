@@ -1,8 +1,9 @@
 """Billing routes — API key management, credits, and analytics."""
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
-from app.services import credits, analytics
+from app.services import credits, analytics, rate_limiter
 from app.services.blockchain_listener import register_wallet
+from app.config import settings
 
 router = APIRouter(prefix="/billing", tags=["billing"])
 
@@ -12,8 +13,12 @@ class RegisterWalletRequest(BaseModel):
 
 
 @router.post("/create-key")
-async def create_key():
-    """Generate a new API key. Top it up with credits to start using the API."""
+async def create_key(request: Request):
+    """Generate a new API key. Rate limited to prevent key spray."""
+    ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "unknown")
+    ip = ip.split(",")[0].strip()
+    if not rate_limiter.is_allowed(ip):
+        raise HTTPException(status_code=429, detail="Too many key requests. Please wait.")
     key = credits.generate_api_key()
     return {
         "api_key": key,
@@ -76,9 +81,10 @@ async def billing_stats():
 
 @router.get("/analytics")
 async def analytics_dashboard(key: str = Query(..., description="Admin API key"), days: int = Query(7, ge=1, le=30)):
-    """Usage analytics: top tools, daily revenue, conversion rate."""
-    balance = credits.get_balance(key)
-    if not balance:
+    """Usage analytics: top tools, daily revenue, conversion rate. Admin-only."""
+    if not settings.admin_api_key:
+        raise HTTPException(status_code=403, detail="Analytics not configured")
+    if key != settings.admin_api_key:
         raise HTTPException(status_code=403, detail="Invalid admin key")
     return analytics.get_stats(days)
 

@@ -43,6 +43,13 @@ def is_allowed(ip: str) -> bool:
         return True
 
 
+def reset() -> None:
+    """Clear all rate limit state. Used in tests."""
+    global _ips
+    with _lock:
+        _ips = {}
+
+
 def get_stats() -> dict:
     with _lock:
         return {

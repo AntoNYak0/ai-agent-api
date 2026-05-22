@@ -3,7 +3,7 @@
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from app.pricing import (
-    AI_UPTO_SERVICES, EXACT_SERVICES, COMPOSITE_SKILLS,
+    AI_UPTO_SERVICES, EXACT_SERVICES,
     NETWORKS, WALLET, DOMAIN, GITHUB,
 )
 
@@ -85,6 +85,22 @@ def _build_response_schema(info: dict) -> dict:
     return {"type": "object", "properties": props}
 
 
+def _build_x_payment_info(price: str, scheme: str) -> dict:
+    """Build x-payment-info per x402scan DISCOVERY.md spec (OpenAPI-first indexing)."""
+    if scheme == "exact":
+        return {
+            "protocols": ["x402"],
+            "price": {"mode": "fixed", "currency": "USD", "amount": price.replace("$", "")},
+        }
+    # upto: "$0.01–$0.05" → dynamic with max
+    parts = price.replace("$", "").split("–")
+    max_price = parts[1] if len(parts) > 1 else parts[0]
+    return {
+        "protocols": ["x402"],
+        "price": {"mode": "dynamic", "currency": "USD", "amount": max_price},
+    }
+
+
 def _build_openapi_spec() -> dict:
     paths = {}
     for path, info in _SVC.items():
@@ -95,6 +111,7 @@ def _build_openapi_spec() -> dict:
                 "x-x402-price": info["price"],
                 "x-x402-scheme": info["scheme"],
                 "x-x402-networks": [n["caip2"] for n in NETWORKS],
+                "x-payment-info": _build_x_payment_info(info["price"], info["scheme"]),
                 "requestBody": {
                     "required": True,
                     "content": {
@@ -150,6 +167,22 @@ def _build_openapi_spec() -> dict:
             },
         },
         "servers": [{"url": DOMAIN, "description": "Production"}],
+        "x-discovery": {
+            "ownershipProofs": [
+                {"type": "github", "url": GITHUB},
+                {"type": "dns", "domain": DOMAIN.replace("https://", "")},
+            ],
+        },
+        "security": [{"x402": []}],
+        "components": {
+            "securitySchemes": {
+                "x402": {
+                    "type": "http",
+                    "scheme": "bearer",
+                    "description": "x402 micropayments in USDC. Send PAYMENT header with signed transaction.",
+                }
+            }
+        },
         "paths": paths,
     }
 
@@ -182,7 +215,6 @@ async def x402_manifest():
 
     return JSONResponse({
         "x402_version": 2,
-        "version": 2,
         "name": f"AI Agent API — {len(_SVC)} pay-per-call services for agent pipelines",
         "resources": resources,
         "description": (
@@ -372,49 +404,6 @@ async def glama_json():
         "repository": GITHUB,
         "license": "MIT",
     })
-
-
-@router.get("/.well-known/agentictrade.json")
-async def agentictrade_json():
-    """AgenticTrade marketplace listing — https://agentictrade.io provider discovery."""
-    tools = []
-    for path, info in _SVC.items():
-        name = path.replace("/api/", "").replace("-", "_")
-        tools.append({
-            "name": name,
-            "description": info["summary"],
-            "scheme": info["scheme"],
-            "price": _display_price(info),
-        })
-
-    return JSONResponse({
-        "name": "AI Agent API",
-        "version": "2.0.0",
-        "description": (
-            f"{len(_SVC)} pay-per-call AI services via x402 USDC micropayments. "
-            "Code audit, refactoring, DeFi analysis, Solidity scanner, "
-            "SQL/NL tools, micro-tasks, security, data feeds, composite workflows. "
-            "Powered by DeepSeek V4 Pro (1M context)."
-        ),
-        "endpoint": DOMAIN,
-        "mcp_transport": "sse",
-        "mcp_url": f"{DOMAIN}/mcp/sse",
-        "payment": {
-            "protocol": "x402",
-            "currency": "USDC",
-            "networks": ["base", "arbitrum", "optimism"],
-            "wallet": WALLET,
-            "price_range": "$0.0005–$1.00 USD",
-        },
-        "tools": tools,
-        "contact": {
-            "email": "admin@agent-api-ai.duckdns.org",
-            "github": GITHUB,
-        },
-        "repository": GITHUB,
-        "license": "MIT",
-    })
-
 
 @router.get("/.well-known/agent.json")
 async def agent_json():

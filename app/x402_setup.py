@@ -21,6 +21,7 @@ logger = logging.getLogger("x402")
 
 CDP_FACILITATOR_URL = "https://api.cdp.coinbase.com/platform/v2/x402"
 PAYAI_FACILITATOR_URL = "https://facilitator.payai.network"
+CHAOSCHAIN_FACILITATOR_URL = "https://facilitator.chaoscha.in"
 
 # Token rate: $0.003 per 1K tokens (DeepSeek cost ~$0.0014/1K, x2 margin)
 PER_1K_TOKENS_MICROUNITS = 3000
@@ -31,15 +32,16 @@ def validate_min_price(request, min_microunits: int):
     Returns (ok: bool, error_json: dict | None).
     Call BEFORE deepseek_completion in upto routes to avoid wasting tokens on underpayment.
     """
-    from fastapi.responses import JSONResponse
-
     # API key users have their own credit system — skip check
     if hasattr(request.state, "human_api_key"):
         return True, None
 
-    # No payment info at all — let x402 middleware handle it
+    # No payment info at all — fail closed, don't silently allow free AI calls
     if not hasattr(request.state, "payment_requirements"):
-        return True, None
+        return False, {
+            "error": "payment_required",
+            "message": "x402 payment data missing. Ensure payment-signature header is present.",
+        }
 
     try:
         authorized = int(request.state.payment_requirements.amount)
@@ -157,6 +159,15 @@ def configure_x402(
             )
             mode = "payai"
 
+    if mode == "payai_auth":
+        # PayAI Facilitator with merchant API key — registered merchant, visible on Bazaar
+        if not settings.payai_api_key_id or not settings.payai_api_key_secret:
+            logger.warning(
+                "facilitator_mode=payai_auth but PAYAI_API_KEY_ID/PAYAI_API_KEY_SECRET not set. "
+                "Falling back to unauthenticated payai."
+            )
+            mode = "payai"
+
     if mode == "cdp":
         from app.cdp_auth import create_cdp_auth_provider
 
@@ -173,6 +184,21 @@ def configure_x402(
             )
         )
         logger.info("x402: using CDP Facilitator at %s (agentic.market listing enabled)", CDP_FACILITATOR_URL)
+    elif mode == "payai_auth":
+        from app.payai_auth import create_payai_auth_provider
+        auth_provider = create_payai_auth_provider(
+            settings.payai_api_key_id,
+            settings.payai_api_key_secret,
+        )
+        facilitator = HTTPFacilitatorClient(
+            FacilitatorConfig(
+                url=PAYAI_FACILITATOR_URL,
+                timeout=30.0,
+                auth_provider=auth_provider,
+                identifier="payai",
+            )
+        )
+        logger.info("x402: using PayAI Facilitator at %s (registered merchant, Bazaar visible)", PAYAI_FACILITATOR_URL)
     elif mode == "payai":
         facilitator = HTTPFacilitatorClient(
             FacilitatorConfig(
@@ -182,6 +208,15 @@ def configure_x402(
             )
         )
         logger.info("x402: using PayAI Facilitator at %s (no KYC, free)", PAYAI_FACILITATOR_URL)
+    elif mode == "chaoschain":
+        facilitator = HTTPFacilitatorClient(
+            FacilitatorConfig(
+                url=CHAOSCHAIN_FACILITATOR_URL,
+                timeout=30.0,
+                identifier="chaoschain",
+            )
+        )
+        logger.info("x402: using ChaosChain Facilitator at %s (BFT-verified, ERC-8004 identity)", CHAOSCHAIN_FACILITATOR_URL)
     elif testnet:
         facilitator = DirectFacilitator(testnet=True, pay_to=pay_to_evm)
         logger.info("x402: using DirectFacilitator (testnet mode)")
@@ -210,8 +245,8 @@ def configure_x402(
     app.state.x402_pay_to = pay_to_evm
     logger.info("x402: facilitator stored on app.state — routes will settle with actual usage")
 
-    # PayAI only supports Base; Direct supports all 3 EVM networks
-    if mode == "payai":
+    # PayAI and ChaosChain only support Base; Direct supports all 3 EVM networks
+    if mode in ("payai", "payai_auth", "chaoschain"):
         common_networks = ["eip155:8453"] if not testnet else ["eip155:84532"]
     else:
         common_networks = list(evm_networks)
@@ -275,7 +310,7 @@ def configure_x402(
         app_name="AI Agent API — 16 pay-per-call services ($0.0005–$0.08 USDC)",
     )
 
-    from app.services import credits, analytics
+    from app.services import analytics
 
     x402_mw = payment_middleware(routes, server, paywall_config=paywall)
 

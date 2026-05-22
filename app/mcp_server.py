@@ -30,7 +30,7 @@ logger = logging.getLogger("mcp_server")
 
 mcp = FastMCP(
     name="ai-agent-api",
-    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=True),
     instructions="""
 AI Agent API — 16 pay-per-call tools for developers and AI agents via x402.
 
@@ -87,6 +87,15 @@ elif mode == "payai":
         )
     )
     logger.info("MCP: using PayAI Facilitator (no KYC, free)")
+elif mode == "chaoschain":
+    facilitator = HTTPFacilitatorClient(
+        FacilitatorConfig(
+            url="https://facilitator.chaoscha.in",
+            timeout=30.0,
+            identifier="chaoschain",
+        )
+    )
+    logger.info("MCP: using ChaosChain Facilitator (BFT-verified, ERC-8004 identity)")
 elif settings.testnet:
     facilitator = DirectFacilitator(testnet=True, pay_to=settings.pay_to_address_evm)
     logger.info("MCP: using DirectFacilitator (testnet mode)")

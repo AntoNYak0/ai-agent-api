@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 from openai import AsyncOpenAI
 from app.config import settings
 
@@ -9,6 +10,30 @@ logger = logging.getLogger("deepseek")
 class DeepSeekError(Exception):
     """Raised when DeepSeek API is unavailable after all retries."""
     pass
+
+
+# Prompt injection patterns — blocked in user input
+_INJECTION_PATTERNS = [
+    r"ignore\s+(all\s+)?(previous|prior|above|system)\s+(instructions?|prompts?|messages?)",
+    r"forget\s+(all\s+)?(previous|prior|system)\s+(instructions?|prompts?)",
+    r"you\s+are\s+now\s+(a\s+)?(different|new)\s+(ai|assistant|model)",
+    r"system\s+prompt\s*(:|\n|is|was)",
+    r"<\|im_start\|>",
+    r"<\|im_end\|>",
+    r"\[INST\]",
+    r"\[/INST\]",
+    r"\[SYSTEM\]",
+    r"\[/SYSTEM\]",
+]
+_INJECTION_RE = re.compile("|".join(f"(?:{p})" for p in _INJECTION_PATTERNS), re.IGNORECASE)
+
+
+def _sanitize(text: str) -> str:
+    """Flag obvious prompt injection in user input."""
+    if _INJECTION_RE.search(text):
+        logger.warning("Prompt injection blocked in user input (len=%d)", len(text))
+        raise DeepSeekError("Input contains blocked patterns")
+    return text
 
 client = AsyncOpenAI(
     base_url=settings.deepseek_base_url,
@@ -25,6 +50,11 @@ async def deepseek_completion(
     context_window: str | None = None,
     json_mode: bool = False,
 ) -> tuple[str, int]:
+    # Sanitize user input against prompt injection
+    _sanitize(user_content)
+    if context_window:
+        _sanitize(context_window)
+
     messages = [{"role": "system", "content": system_prompt}]
 
     if context_window:
@@ -66,6 +96,10 @@ async def deepseek_completion_stream(
 ):
     """Stream DeepSeek response chunk by chunk. Yields text fragments."""
     import warnings
+    _sanitize(user_content)
+    if context_window:
+        _sanitize(context_window)
+
     messages = [{"role": "system", "content": system_prompt}]
 
     if context_window:

@@ -1,9 +1,10 @@
 """Custom x402 facilitator — no Coinbase dependency.
 
 Testnet: auto-approves payments (for testing).
-Mainnet: verifies USDC transfers via public Base/Polygon RPC.
+Mainnet: verifies USDC transfers via public RPCs with failover.
 """
 import logging
+import uuid
 
 from x402.schemas import (
     PaymentPayload,
@@ -16,13 +17,30 @@ from x402.schemas import (
 
 logger = logging.getLogger("facilitator")
 
+# Primary + backup RPC URLs per network
 RPC_URLS = {
-    "eip155:8453": "https://mainnet.base.org",
-    "eip155:42161": "https://arb1.arbitrum.io/rpc",
-    "eip155:10": "https://mainnet.optimism.io",
-    "eip155:84532": "https://sepolia.base.org",
-    "eip155:421614": "https://sepolia-rollup.arbitrum.io/rpc",
-    "eip155:11155420": "https://sepolia.optimism.io",
+    "eip155:8453": [
+        "https://mainnet.base.org",
+        "https://base.llamarpc.com",
+        "https://base-pokt.nodies.app",
+    ],
+    "eip155:42161": [
+        "https://arb1.arbitrum.io/rpc",
+        "https://arbitrum.llamarpc.com",
+    ],
+    "eip155:10": [
+        "https://mainnet.optimism.io",
+        "https://optimism.llamarpc.com",
+    ],
+    "eip155:84532": [
+        "https://sepolia.base.org",
+    ],
+    "eip155:421614": [
+        "https://sepolia-rollup.arbitrum.io/rpc",
+    ],
+    "eip155:11155420": [
+        "https://sepolia.optimism.io",
+    ],
 }
 
 # USDC contract addresses by CAIP-2 network
@@ -88,154 +106,154 @@ class DirectFacilitator:
         payload: PaymentPayload,
         requirements: PaymentRequirements,
     ) -> VerifyResponse:
-        """Verify a real USDC payment via public RPC with amount + contract checks."""
+        """Verify a real USDC payment via public RPC with failover + amount/contract checks."""
         import httpx
 
         network = requirements.network
-        rpc_url = RPC_URLS.get(network, "https://mainnet.base.org")
+        rpc_urls = RPC_URLS.get(network, ["https://mainnet.base.org"])
         tx_hash = payload.payload.get("transactionHash", "")
+        corr_id = str(uuid.uuid4())[:8]
 
         if not tx_hash:
-            logger.warning("Verification rejected: missing transactionHash")
+            logger.warning("cid=%s reason=missing_tx_hash", corr_id)
             return VerifyResponse(
                 is_valid=False,
                 invalid_reason="missing_tx_hash",
                 invalid_message="Payment payload must include transactionHash",
             )
 
-        # Verify we support this network
         expected_contract = USDC_CONTRACTS.get(network)
         if not expected_contract:
-            logger.warning("Verification rejected: unsupported network %s", network)
+            logger.warning("cid=%s reason=unsupported_network network=%s", corr_id, network)
             return VerifyResponse(
                 is_valid=False,
                 invalid_reason="unsupported_network",
                 invalid_message=f"Network {network} not supported. Use Base (eip155:8453), Arbitrum (eip155:42161), or Optimism (eip155:10)",
             )
 
-        logger.info("Verifying tx %s... on %s", tx_hash[:16], network)
+        logger.info("cid=%s verifying tx=%s network=%s", corr_id, tx_hash[:16], network)
 
-        try:
-            async with httpx.AsyncClient(timeout=20) as client:
-                # 1. Get transaction receipt
-                resp = await client.post(
-                    rpc_url,
-                    json={
-                        "jsonrpc": "2.0",
-                        "id": 1,
-                        "method": "eth_getTransactionReceipt",
-                        "params": [tx_hash],
-                    },
-                )
-                data = resp.json()
-                receipt = data.get("result")
+        receipt = None
+        last_error = None
+        tried_urls = []
 
-                if not receipt:
-                    logger.warning("Tx %s... not found on chain", tx_hash[:16])
-                    return VerifyResponse(
-                        is_valid=False,
-                        invalid_reason="tx_not_found",
-                        invalid_message=f"Transaction {tx_hash[:10]}... not found on chain. Wait for confirmation.",
+        for rpc_url in rpc_urls:
+            tried_urls.append(rpc_url)
+            try:
+                async with httpx.AsyncClient(timeout=20) as client:
+                    resp = await client.post(
+                        rpc_url,
+                        json={
+                            "jsonrpc": "2.0",
+                            "id": 1,
+                            "method": "eth_getTransactionReceipt",
+                            "params": [tx_hash],
+                        },
                     )
+                    if resp.status_code == 413:
+                        logger.warning("cid=%s rpc=%s status=413 retrying", corr_id, rpc_url[:40])
+                        last_error = f"RPC {rpc_url[:40]}: 413 Payload Too Large"
+                        continue
+                    if resp.status_code != 200:
+                        last_error = f"RPC {rpc_url[:40]}: HTTP {resp.status_code}"
+                        continue
+                    data = resp.json()
+                    receipt = data.get("result")
+                    if receipt:
+                        break
+            except Exception as e:
+                last_error = f"RPC {rpc_url[:40]}: {e}"
+                logger.debug("cid=%s rpc=%s error=%s", corr_id, rpc_url[:40], e)
+                continue
 
-                if receipt.get("status") != "0x1":
-                    logger.warning("Tx %s... reverted (status=%s)", tx_hash[:16], receipt.get("status"))
-                    return VerifyResponse(
-                        is_valid=False,
-                        invalid_reason="tx_failed",
-                        invalid_message="Transaction reverted or failed",
-                    )
-
-                # 2. Find the USDC Transfer event in logs (match contract + topic)
-                expected_contract_lower = expected_contract.lower()
-                transfer_amount = None
-                transfer_recipient = None
-
-                for log in receipt.get("logs", []):
-                    topics = log.get("topics", [])
-                    log_address = log.get("address", "").lower()
-
-                    if topics and topics[0] == TRANSFER_EVENT_TOPIC:
-                        # Must be the expected USDC contract, not some other ERC-20
-                        if log_address != expected_contract_lower:
-                            continue
-
-                        # topics[1] = from (indexed), topics[2] = to (indexed)
-                        if len(topics) >= 3:
-                            transfer_recipient = "0x" + topics[2][-40:]
-
-                        # data contains uint256 amount
-                        log_data = log.get("data", "0x")
-                        if log_data and log_data != "0x":
-                            transfer_amount = int(log_data, 16)
-
-                        break  # Found our USDC Transfer
-
-                if transfer_recipient is None:
-                    logger.warning(
-                        "Tx %s... no USDC Transfer from %s. Log count: %d",
-                        tx_hash[:16], expected_contract, len(receipt.get("logs", [])),
-                    )
-                    return VerifyResponse(
-                        is_valid=False,
-                        invalid_reason="no_usdc_transfer",
-                        invalid_message=f"No USDC Transfer event from contract {expected_contract} found in transaction logs",
-                    )
-
-                # 3. Check recipient
-                transfer_recipient_lower = transfer_recipient.lower()
-                if self.pay_to and transfer_recipient_lower != self.pay_to:
-                    logger.warning(
-                        "Tx %s... wrong recipient: got %s, expected %s",
-                        tx_hash[:16], transfer_recipient, self.pay_to,
-                    )
-                    return VerifyResponse(
-                        is_valid=False,
-                        invalid_reason="wrong_recipient",
-                        invalid_message=f"USDC sent to {transfer_recipient}, expected {self.pay_to}",
-                    )
-
-                # 4. Check amount
-                required_amount_str = requirements.amount
-                if required_amount_str and transfer_amount is not None:
-                    try:
-                        required_amount = int(required_amount_str)
-                    except (ValueError, TypeError):
-                        required_amount = 0
-
-                    if required_amount > 0 and transfer_amount < required_amount:
-                        logger.warning(
-                            "Tx %s... insufficient amount: got %.4f USDC, need %.4f USDC",
-                            tx_hash[:16],
-                            transfer_amount / 1e6,
-                            required_amount / 1e6,
-                        )
-                        return VerifyResponse(
-                            is_valid=False,
-                            invalid_reason="insufficient_amount",
-                            invalid_message=(
-                                f"Payment insufficient: got {transfer_amount / 1e6:.4f} USDC, "
-                                f"required at least {required_amount / 1e6:.4f} USDC"
-                            ),
-                        )
-
-                logger.info(
-                    "Payment verified: tx=%s... payer=%s amount=%.4f USDC",
-                    tx_hash[:16],
-                    receipt.get("from", "")[:10],
-                    transfer_amount / 1e6 if transfer_amount else 0,
-                )
-                return VerifyResponse(
-                    is_valid=True,
-                    payer=receipt.get("from", ""),
-                )
-        except Exception as e:
-            logger.error("RPC verification failed for tx %s...: %s", tx_hash[:16], e)
+        if not receipt:
+            logger.warning("cid=%s tx=%s reason=tx_not_found tried=%s", corr_id, tx_hash[:16], tried_urls)
             return VerifyResponse(
                 is_valid=False,
-                invalid_reason="rpc_error",
-                invalid_message=f"Payment verification failed: {e}",
+                invalid_reason="tx_not_found",
+                invalid_message=f"Transaction {tx_hash[:10]}... not found on chain. Tried {len(tried_urls)} RPC(s). Wait for confirmation.",
             )
+
+        if receipt.get("status") != "0x1":
+            logger.warning("cid=%s tx=%s reason=tx_reverted status=%s", corr_id, tx_hash[:16], receipt.get("status"))
+            return VerifyResponse(
+                is_valid=False,
+                invalid_reason="tx_failed",
+                invalid_message="Transaction reverted or failed",
+            )
+
+        # 2. Find the USDC Transfer event in logs (match contract + topic)
+        expected_contract_lower = expected_contract.lower()
+        transfer_amount = None
+        transfer_recipient = None
+
+        for log in receipt.get("logs", []):
+            topics = log.get("topics", [])
+            log_address = log.get("address", "").lower()
+
+            if topics and topics[0] == TRANSFER_EVENT_TOPIC:
+                if log_address != expected_contract_lower:
+                    continue
+
+                if len(topics) >= 3:
+                    transfer_recipient = "0x" + topics[2][-40:]
+
+                log_data = log.get("data", "0x")
+                if log_data and log_data != "0x":
+                    transfer_amount = int(log_data, 16)
+
+                break  # Found our USDC Transfer
+
+        if transfer_recipient is None:
+            logger.warning("cid=%s tx=%s reason=no_usdc_transfer contract=%s logs=%d",
+                corr_id, tx_hash[:16], expected_contract, len(receipt.get("logs", [])))
+            return VerifyResponse(
+                is_valid=False,
+                invalid_reason="no_usdc_transfer",
+                invalid_message=f"No USDC Transfer event from contract {expected_contract} found in transaction logs",
+            )
+
+        # 3. Check recipient
+        transfer_recipient_lower = transfer_recipient.lower()
+        if self.pay_to and transfer_recipient_lower != self.pay_to:
+            logger.warning("cid=%s tx=%s reason=wrong_recipient got=%s expected=%s",
+                corr_id, tx_hash[:16], transfer_recipient, self.pay_to)
+            return VerifyResponse(
+                is_valid=False,
+                invalid_reason="wrong_recipient",
+                invalid_message=f"USDC sent to {transfer_recipient}, expected {self.pay_to}",
+            )
+
+        # 4. Check amount
+        required_amount_str = requirements.amount
+        if required_amount_str and transfer_amount is not None:
+            try:
+                required_amount = int(required_amount_str)
+            except (ValueError, TypeError):
+                required_amount = 0
+
+            if required_amount > 0 and transfer_amount < required_amount:
+                logger.warning("cid=%s tx=%s reason=insufficient_amount got=%.4f need=%.4f",
+                    corr_id, tx_hash[:16],
+                    transfer_amount / 1e6,
+                    required_amount / 1e6)
+                return VerifyResponse(
+                    is_valid=False,
+                    invalid_reason="insufficient_amount",
+                    invalid_message=(
+                        f"Payment insufficient: got {transfer_amount / 1e6:.4f} USDC, "
+                        f"required at least {required_amount / 1e6:.4f} USDC"
+                    ),
+                )
+
+        logger.info("cid=%s tx=%s result=verified payer=%s amount=%.4f USDC",
+            corr_id, tx_hash[:16],
+            receipt.get("from", "")[:10],
+            transfer_amount / 1e6 if transfer_amount else 0)
+        return VerifyResponse(
+            is_valid=True,
+            payer=receipt.get("from", ""),
+        )
 
     async def settle(
         self,

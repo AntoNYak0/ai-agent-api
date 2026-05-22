@@ -26,16 +26,21 @@ async def data_feed(request: Request, body: DataFeedRequest):
     if not ok:
         return JSONResponse(status_code=402, content=err, headers={"PAYMENT-REQUIRED": "true"})
 
+    is_api_key = hasattr(request.state, "human_api_key")
+    if is_api_key:
+        cost_cents = round_up_cents((FEED_BASE / 10000) * CREDIT_MULTIPLIER)
+        balance = credits.get_balance(request.state.human_api_key)
+        if not balance or (balance["credits"] / 10) < cost_cents:
+            analytics.track("data-feed", "api_key", False, 0, 0)
+            return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
+
     content = f"Topic: {body.topic}\nRequested format: {body.format or 'json'}"
     result, tokens = await cached_completion("data-feed", content, DATA_FEED_PROMPT, None, json_mode=True)
 
-    is_api_key = hasattr(request.state, "human_api_key")
     microunits = FEED_BASE + int((tokens / 1000) * 3000)
     if is_api_key:
         cost_cents = round_up_cents((microunits / 10000) * CREDIT_MULTIPLIER)
-        ok = credits.spend_credits(request.state.human_api_key, cost_cents)
-        if not ok:
-            return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
+        credits.spend_credits(request.state.human_api_key, cost_cents)
         analytics.track("data-feed", "api_key", True, tokens, cost_cents / 100)
     else:
         await settle_actual_usage(request, microunits)

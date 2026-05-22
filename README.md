@@ -1,4 +1,9 @@
-# AI Agent API — 16 pay-per-call AI services via USDC
+# AI Agent API — 20 pay-per-call AI services via USDC
+
+[![CI](https://github.com/AntoNYak0/ai-agent-api/actions/workflows/ci.yml/badge.svg)](https://github.com/AntoNYak0/ai-agent-api/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![MCP Tools](https://img.shields.io/badge/MCP%20tools-20-blue)](https://agent-api-ai.duckdns.org/mcp/sse)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org)
 
 **DeepSeek V4 Pro (1M context) · x402 micropayments · MCP for AI agents · API keys for humans**
 
@@ -18,7 +23,7 @@ curl -X POST https://agent-api-ai.duckdns.org/api/validate-json \
 # → HTTP 402 + PAYMENT-REQUIRED header with price and payment details
 ```
 
-## 16 Services
+## 20 MCP Tools + 24 REST Services
 
 ### AI Services (upto pricing — pay for actual token usage)
 
@@ -81,7 +86,19 @@ curl -X POST https://agent-api-ai.duckdns.org/api/validate-json \
 SSE Endpoint: https://agent-api-ai.duckdns.org/mcp/sse
 ```
 
-Listed on: mcp.so, Smithery.ai, Glama.ai
+Listed on: [Smithery.ai](https://smithery.ai/servers/antoNYak0/ai-agent-api) · [Glama.ai](https://glama.ai/mcp/servers?query=agent-api) · [mcp.so](https://mcp.so) (pending review)
+
+## Agent Discovery
+
+AI agents can discover this server through:
+
+| Marketplace | Discovery | Type |
+|-------------|-----------|------|
+| [Smithery.ai](https://smithery.ai/servers/antoNYak0/ai-agent-api) | `smithery.yaml` + `/.well-known/mcp/server-card.json` | MCP directory |
+| [Glama.ai](https://glama.ai/mcp/servers?query=agent-api) | `/.well-known/glama.json` | MCP directory |
+| [mcp.so](https://mcp.so) | `mcp.json` + GitHub Issue [#2453](https://github.com/chatmcp/mcpso/issues/2453) | MCP directory |
+
+For AI agents: read [AGENTS.md](AGENTS.md) for connection instructions.
 
 ## Response Format
 

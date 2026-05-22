@@ -6,10 +6,12 @@ AI agents pay via x402 (USDC crypto). This hybrid model solves the
 crypto wallets.
 
 Storage: JSON file at /opt/agent-api/data/credits.json
+Keys stored as SHA-256 hashes — plaintext keys never written to disk.
 """
 
 import json
 import secrets
+import hashlib
 import time
 import threading
 from pathlib import Path
@@ -22,6 +24,32 @@ _lock = threading.Lock()
 # Credit prices: 1 credit = $0.001 USDC equivalent
 # Stripe commission ~3%, so human price is ~1.5x crypto price
 CREDITS_PER_CENT = 10  # 10 credits = $0.01
+
+
+def _hash_key(api_key: str) -> str:
+    """SHA-256 hash of API key — never store plaintext on disk."""
+    return hashlib.sha256(api_key.encode()).hexdigest()
+
+
+def _resolve_key(data: dict, api_key: str) -> str | None:
+    """Look up API key with backward compatibility.
+    New keys stored as SHA-256 hashes; old keys may still be raw strings.
+    Returns the storage key if found, None otherwise.
+    """
+    key_hash = _hash_key(api_key)
+    if key_hash in data["keys"]:
+        return key_hash
+    if api_key in data["keys"]:
+        return api_key
+    return None
+
+
+def _migrate_key(data: dict, api_key: str) -> str:
+    """Migrate a raw API key to SHA-256 hash. Returns the new storage key."""
+    key_hash = _hash_key(api_key)
+    if api_key in data["keys"]:
+        data["keys"][key_hash] = data["keys"].pop(api_key)
+    return key_hash
 
 
 def _load() -> dict:
@@ -45,11 +73,11 @@ def _save(data: dict) -> None:
 
 
 def generate_api_key() -> str:
-    """Generate a new API key and return it."""
+    """Generate a new API key. Returns raw key (store it — never shown again)."""
     key = "ak-" + secrets.token_hex(16)
     with _lock:
         data = _load()
-        data["keys"][key] = {
+        data["keys"][_hash_key(key)] = {
             "credits": 0,
             "total_spent_credits": 0,
             "created_at": time.time(),
@@ -81,12 +109,16 @@ def add_credits(api_key: str, amount_cents: int) -> int:
     credits_to_add = int(amount_cents * CREDITS_PER_CENT * multiplier)
     with _lock:
         data = _load()
-        if api_key not in data["keys"]:
+        storage_key = _resolve_key(data, api_key)
+        if not storage_key:
             raise ValueError("Unknown API key")
-        data["keys"][api_key]["credits"] += credits_to_add
+        storage_key = _migrate_key(data, api_key)
+        data["keys"][storage_key]["credits"] += credits_to_add
+        if "total_revenue_cents" not in data:
+            data["total_revenue_cents"] = data.get("total_topup_cents", 0)
         data["total_revenue_cents"] += amount_cents
         _save(data)
-    return data["keys"][api_key]["credits"]
+    return data["keys"][storage_key]["credits"]
 
 
 def spend_credits(api_key: str, amount_cents: int) -> bool:
@@ -94,8 +126,11 @@ def spend_credits(api_key: str, amount_cents: int) -> bool:
     credits_needed = amount_cents * CREDITS_PER_CENT
     with _lock:
         data = _load()
-        entry = data["keys"].get(api_key)
-        if not entry or entry["credits"] < credits_needed:
+        storage_key = _resolve_key(data, api_key)
+        if not storage_key:
+            return False
+        entry = data["keys"][storage_key]
+        if entry["credits"] < credits_needed:
             return False
         entry["credits"] -= credits_needed
         entry["total_spent_credits"] += credits_needed
@@ -107,9 +142,10 @@ def spend_credits(api_key: str, amount_cents: int) -> bool:
 def get_balance(api_key: str) -> dict | None:
     """Return balance info for an API key."""
     data = _load()
-    entry = data["keys"].get(api_key)
-    if not entry:
+    storage_key = _resolve_key(data, api_key)
+    if not storage_key:
         return None
+    entry = data["keys"][storage_key]
     return {
         "credits": entry["credits"],
         "usd_equivalent": entry["credits"] / CREDITS_PER_CENT / 100,
@@ -123,8 +159,9 @@ def get_stats() -> dict:
     """Return global stats."""
     data = _load()
     active_keys = sum(1 for v in data["keys"].values() if v["credits"] > 0)
+    revenue_cents = data.get("total_revenue_cents", data.get("total_topup_cents", 0))
     return {
         "total_keys": len(data["keys"]),
         "active_keys": active_keys,
-        "total_revenue_usd": data["total_revenue_cents"] / 100,
+        "total_revenue_usd": revenue_cents / 100,
     }

@@ -44,16 +44,21 @@ async def agent_audit(request: Request, body: AgentAuditRequest):
     if not ok:
         return JSONResponse(status_code=402, content=err, headers={"PAYMENT-REQUIRED": "true"})
 
+    is_api_key = hasattr(request.state, "human_api_key")
+    if is_api_key:
+        cost_cents = round_up_cents((AGENT_AUDIT_BASE / 10000) * CREDIT_MULTIPLIER)
+        balance = credits.get_balance(request.state.human_api_key)
+        if not balance or (balance["credits"] / 10) < cost_cents:
+            analytics.track("agent-audit", "api_key", False, 0, 0)
+            return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
+
     content = f"Agent: {body.agent_name or 'unnamed'}\nBehavior: {body.behavior_description or 'not provided'}\n\nCode:\n{body.agent_code}"
     result, tokens = await cached_completion("agent-audit", content, AGENT_AUDIT_PROMPT, None, json_mode=True)
 
-    is_api_key = hasattr(request.state, "human_api_key")
     microunits = AGENT_AUDIT_BASE + int((tokens / 1000) * 3000)
     if is_api_key:
         cost_cents = round_up_cents((microunits / 10000) * CREDIT_MULTIPLIER)
-        ok = credits.spend_credits(request.state.human_api_key, cost_cents)
-        if not ok:
-            return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
+        credits.spend_credits(request.state.human_api_key, cost_cents)
         analytics.track("agent-audit", "api_key", True, tokens, cost_cents / 100)
     else:
         await settle_actual_usage(request, microunits)
@@ -68,16 +73,21 @@ async def contract_verify(request: Request, body: ContractVerifyRequest):
     if not ok:
         return JSONResponse(status_code=402, content=err, headers={"PAYMENT-REQUIRED": "true"})
 
+    is_api_key = hasattr(request.state, "human_api_key")
+    if is_api_key:
+        cost_cents = round_up_cents((CONTRACT_VERIFY_BASE / 10000) * CREDIT_MULTIPLIER)
+        balance = credits.get_balance(request.state.human_api_key)
+        if not balance or (balance["credits"] / 10) < cost_cents:
+            analytics.track("contract-verify", "api_key", False, 0, 0)
+            return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
+
     content = f"Contract: {body.contract_name or 'unnamed'}\nNetwork: {body.network or 'ethereum'}\n\nCode:\n{body.contract_code}"
     result, tokens = await cached_completion("contract-verify", content, CONTRACT_VERIFY_PROMPT, None, json_mode=True)
 
-    is_api_key = hasattr(request.state, "human_api_key")
     microunits = CONTRACT_VERIFY_BASE + int((tokens / 1000) * 3000)
     if is_api_key:
         cost_cents = round_up_cents((microunits / 10000) * CREDIT_MULTIPLIER)
-        ok = credits.spend_credits(request.state.human_api_key, cost_cents)
-        if not ok:
-            return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
+        credits.spend_credits(request.state.human_api_key, cost_cents)
         analytics.track("contract-verify", "api_key", True, tokens, cost_cents / 100)
     else:
         await settle_actual_usage(request, microunits)
@@ -92,16 +102,21 @@ async def security_score(request: Request, body: SecurityScoreRequest):
     if not ok:
         return JSONResponse(status_code=402, content=err, headers={"PAYMENT-REQUIRED": "true"})
 
+    is_api_key = hasattr(request.state, "human_api_key")
+    if is_api_key:
+        cost_cents = round_up_cents((SECURITY_SCORE_BASE / 10000) * CREDIT_MULTIPLIER)
+        balance = credits.get_balance(request.state.human_api_key)
+        if not balance or (balance["credits"] / 10) < cost_cents:
+            analytics.track("security-score", "api_key", False, 0, 0)
+            return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
+
     content = f"Code:\n{body.code}\n\nDescription: {body.description or 'not provided'}"
     result, tokens = await cached_completion("security-score", content, SECURITY_SCORE_PROMPT, None, json_mode=True)
 
-    is_api_key = hasattr(request.state, "human_api_key")
     microunits = SECURITY_SCORE_BASE + int((tokens / 1000) * 3000)
     if is_api_key:
         cost_cents = round_up_cents((microunits / 10000) * CREDIT_MULTIPLIER)
-        ok = credits.spend_credits(request.state.human_api_key, cost_cents)
-        if not ok:
-            return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
+        credits.spend_credits(request.state.human_api_key, cost_cents)
         analytics.track("security-score", "api_key", True, tokens, cost_cents / 100)
     else:
         await settle_actual_usage(request, microunits)

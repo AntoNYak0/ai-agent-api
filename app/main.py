@@ -44,12 +44,13 @@ app = FastAPI(
     version="2.0.0",
 )
 
-# CORS — allow agents from anywhere to call MCP tools
+# CORS — restricted to known origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=["https://agent-api-ai.duckdns.org", "http://localhost:8000"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "payment-signature", "X-Forwarded-For"],
+    expose_headers=["PAYMENT-REQUIRED", "PAYMENT-RESPONSE", "X-PAYMENT-RESPONSE"],
 )
 
 configure_x402(
@@ -367,20 +368,20 @@ async def health_deep():
     """Deep health check — verifies ALL dependencies (DeepSeek, billing, RPCs)."""
     import time
 
-    from app.services.deepseek import deepseek_completion
-
+    import asyncio
     import httpx
 
     results: dict = {"status": "ok", "checks": {}}
 
-    # DeepSeek API
+    # DeepSeek API — TCP connectivity check only (no HTTP, no tokens)
     t0 = time.time()
     try:
-        await deepseek_completion(
-            system_prompt="",
-            user_content="pong",
-            json_mode=False,
+        _, writer = await asyncio.wait_for(
+            asyncio.open_connection("api.deepseek.com", 443),
+            timeout=10.0,
         )
+        writer.close()
+        await writer.wait_closed()
         results["checks"]["deepseek"] = {
             "status": "ok",
             "latency_ms": round((time.time() - t0) * 1000),
@@ -504,6 +505,16 @@ async def cache_control_middleware(request, call_next):
     if request.url.path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
         response.headers["Pragma"] = "no-cache"
+    return response
+
+
+@app.middleware("http")
+async def security_headers_middleware(request, call_next):
+    response = await call_next(request)
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     return response
 
 
