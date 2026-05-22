@@ -183,8 +183,10 @@ async def test_x402_retry_with_payment_signature_does_not_crash(client, monkeypa
     async def mock_deepseek(*args, **kwargs):
         return "mocked AI response"
 
+    async def mock_cached(*args, **kwargs):
+        return ("mocked AI response", 100)
     import app.routes.audit as audit_module
-    monkeypatch.setattr(audit_module, "deepseek_completion", mock_deepseek)
+    monkeypatch.setattr(audit_module, "cached_completion", mock_cached)
 
     # 1. Get 402 challenge
     response = await client.post("/api/audit", json={"code": "function foo() {}"})
