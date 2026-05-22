@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse
 from app.config import settings
 from app.x402_setup import configure_x402
-from app.routes import audit, refactor, docs, defi, trading, micro, billing, solidity_scan, stream, defi_signals, security, data_feed
+from app.routes import audit, refactor, docs, defi, trading, micro, billing, solidity_scan, stream, defi_signals, security, data_feed, workflows
 from app.well_known import router as well_known_router
 from app.mcp_server import mcp as mcp_app
 from app.pricing import ALL_SERVICES, COMPOSITE_SKILLS, NETWORKS, WALLET
@@ -123,6 +123,7 @@ app.include_router(data_feed.router)
 app.include_router(stream.router)
 app.include_router(well_known_router)
 app.include_router(billing.router)
+app.include_router(workflows.router)
 
 # Start blockchain listener for auto-top-up on startup
 @app.on_event("startup")
@@ -195,7 +196,7 @@ a {{ color:#58a6ff }}
 <div class="card">
 <h2>Quick Start — Free Trial</h2>
 <code>curl https://agent-api-ai.duckdns.org/api/validate-json -H "Content-Type: application/json" -d '{{"data":"{{\\"name\\":\\"test\\"}}"}}'</code>
-<p style="margin-top:8px;color:#3fb950;font-size:12px">validate-json is FREE — no payment needed. All other endpoints require x402 USDC or API key.</p>
+<p style="margin-top:8px;color:#8b949e;font-size:12px">validate-json requires x402 USDC payment ($0.0005) or API key credits. All 24 endpoints are pay-per-call.</p>
 </div>
 
 <div class="card">

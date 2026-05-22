@@ -30,7 +30,7 @@ Protocol: MCP (Model Context Protocol)
 3. Call tool again with `payment_tx=<tx-hash>`
 4. Server verifies on-chain, executes tool, returns result
 
-## Available Tools (20)
+## Available Tools (29)
 
 ### AI Services (upto pricing — pay per token usage)
 - **audit** ($0.01-$0.05) — Security scan with OWASP Top 10 + SWC Registry
@@ -43,6 +43,20 @@ Protocol: MCP (Model Context Protocol)
 - **sql-to-nl** ($0.005-$0.02) — SQL to plain English
 - **git-summarize** ($0.005-$0.02) — Git diff to PR description
 - **translate-code** ($0.01-$0.05) — Code translation between languages
+
+### DeFi Signals (upto pricing)
+- **whale-tracker** ($0.015-$0.03) — Whale wallet movement tracking on Base/Arbitrum
+- **smart-money** ($0.025-$0.05) — Smart money wallet analysis — win rate, PnL patterns
+- **price-feed** ($0.01-$0.02) — AI-enhanced token price analysis with S/R levels
+
+### Security (upto pricing)
+- **agent-audit** ($0.25-$0.50) — Full AI agent security audit — code, behavior, trust score
+- **contract-verify** ($0.50-$1.00) — Smart contract formal verification — 36 SWC + DeFi exploits
+- **security-score** ($0.05-$0.10) — Rapid security assessment — quick score and risk level
+
+### Data & DevOps
+- **data-feed** ($0.01-$0.02) — Structured data feed on any topic — machine-readable JSON
+- **debug-log** ($0.01-$0.03) — CI/CD error log analysis — root cause and fix suggestions
 
 ### Micro-tasks (exact flat pricing)
 - **validate-json** ($0.0005) — Validate JSON/YAML structure
@@ -57,6 +71,7 @@ Protocol: MCP (Model Context Protocol)
 - **code-health-check** ($0.10) — Audit → Refactor → Document
 - **smart-contract-audit** ($0.10) — Scan → Document
 - **data-pipeline** ($0.05) — Extract → Format → Summarize
+- **run-workflow** (variable) — Execute a registered composite workflow by ID
 
 ## Common Parameters (every tool)
 

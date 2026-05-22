@@ -49,6 +49,7 @@ async def deepseek_completion(
     user_content: str,
     context_window: str | None = None,
     json_mode: bool = False,
+    max_tokens: int = 2048,
 ) -> tuple[str, int]:
     # Sanitize user input against prompt injection
     _sanitize(user_content)
@@ -65,7 +66,7 @@ async def deepseek_completion(
     kwargs = {
         "model": settings.deepseek_model,
         "messages": messages,
-        "max_tokens": 8192,
+        "max_tokens": max_tokens,
     }
     if json_mode:
         kwargs["response_format"] = {"type": "json_object"}
@@ -93,6 +94,7 @@ async def deepseek_completion_stream(
     user_content: str,
     context_window: str | None = None,
     json_mode: bool = False,
+    max_tokens: int = 2048,
 ):
     """Stream DeepSeek response chunk by chunk. Yields text fragments."""
     import warnings
@@ -110,7 +112,7 @@ async def deepseek_completion_stream(
     kwargs = {
         "model": settings.deepseek_model,
         "messages": messages,
-        "max_tokens": 8192,
+        "max_tokens": max_tokens,
         "stream": True,
         "stream_options": {"include_usage": True},
     }

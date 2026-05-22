@@ -12,6 +12,6 @@ def get_network(request: Request) -> str:
 
 def get_tx(request: Request) -> str:
     try:
-        return request.state.payment_payload.transaction
+        return request.state.payment_payload.payload.get("transactionHash", "unknown")
     except AttributeError:
         return "unknown"

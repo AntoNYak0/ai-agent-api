@@ -1,8 +1,8 @@
-# AI Agent API — 20 pay-per-call AI services via USDC
+# AI Agent API — 29 pay-per-call AI services via USDC
 
 [![CI](https://github.com/AntoNYak0/ai-agent-api/actions/workflows/ci.yml/badge.svg)](https://github.com/AntoNYak0/ai-agent-api/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![MCP Tools](https://img.shields.io/badge/MCP%20tools-20-blue)](https://agent-api-ai.duckdns.org/mcp/sse)
+[![MCP Tools](https://img.shields.io/badge/MCP%20tools-29-blue)](https://agent-api-ai.duckdns.org/mcp/sse)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org)
 
 **DeepSeek V4 Pro (1M context) · x402 micropayments · MCP for AI agents · API keys for humans**
@@ -23,7 +23,7 @@ curl -X POST https://agent-api-ai.duckdns.org/api/validate-json \
 # → HTTP 402 + PAYMENT-REQUIRED header with price and payment details
 ```
 
-## 20 MCP Tools + 24 REST Services
+## 29 MCP Tools + 24 REST Services
 
 ### AI Services (upto pricing — pay for actual token usage)
 
@@ -39,6 +39,29 @@ curl -X POST https://agent-api-ai.duckdns.org/api/validate-json \
 | `sql-to-nl` | $0.005–$0.02 | SQL → plain English |
 | `translate-code` | $0.01–$0.05 | Code translation (Python, TS, Rust, Go, Solidity) |
 | `git-summarize` | $0.005–$0.02 | Git diff → PR description |
+
+### DeFi Signals (upto pricing)
+
+| Service | Price | Description |
+|---|---|---|
+| `whale-tracker` | $0.015–$0.03 | Whale wallet movement tracking on Base/Arbitrum |
+| `smart-money` | $0.025–$0.05 | Smart money wallet analysis — win rate, PnL patterns |
+| `price-feed` | $0.01–$0.02 | AI-enhanced token price analysis with S/R levels |
+
+### Security (upto pricing)
+
+| Service | Price | Description |
+|---|---|---|
+| `agent-audit` | $0.25–$0.50 | Full AI agent security audit — code, behavior, trust score |
+| `contract-verify` | $0.50–$1.00 | Smart contract formal verification — 36 SWC + DeFi exploits |
+| `security-score` | $0.05–$0.10 | Rapid security assessment — quick score and risk level |
+
+### Data & DevOps
+
+| Service | Price | Description |
+|---|---|---|
+| `data-feed` | $0.01–$0.02 | Structured data feed on any topic — machine-readable JSON |
+| `debug-log` | $0.01–$0.03 | CI/CD error log analysis — root cause and fix suggestions |
 
 ### Micro-tasks (exact pricing)
 

@@ -48,16 +48,16 @@ def stats() -> dict:
         return {"entries": len(_cache), "max": MAX_ENTRIES, "ttl": TTL_SECONDS}
 
 
-async def cached_completion(tool: str, user_content: str, system_prompt: str, context: str | None = None, json_mode: bool = True):
+async def cached_completion(tool: str, user_content: str, system_prompt: str, context: str | None = None, json_mode: bool = True, max_tokens: int = 2048):
     """Cache-aware DeepSeek call. Returns (result, tokens) tuple.
     Checks cache before calling DeepSeek. Stores result on cache miss.
     """
-    cache_content = f"{system_prompt[:100]}|{user_content[:200]}"
+    cache_content = f"{system_prompt}|{user_content}"
     cached = get(tool, cache_content)
     if cached:
         return cached, 0  # 0 tokens = cache hit, no cost
 
     from app.services.deepseek import deepseek_completion
-    result, tokens = await deepseek_completion(system_prompt, user_content, context, json_mode)
+    result, tokens = await deepseek_completion(system_prompt, user_content, context, json_mode, max_tokens)
     set(tool, cache_content, result)
     return result, tokens

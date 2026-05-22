@@ -5,6 +5,8 @@ No more duplicated price lists.
 """
 
 # Token rate: $0.003 per 1K tokens (DeepSeek cost ~$0.0014/1K, ~2x margin)
+from app.config import settings
+
 PER_1K_TOKENS_MICROUNITS = 3000
 CREDIT_MULTIPLIER = 1.5  # API keys pay 1.5x vs x402 crypto
 
@@ -33,8 +35,8 @@ NETWORKS = [
      "contract": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"},
 ]
 
-WALLET = "0xdE7eb04faE758055642f67f30D246CcB7136C95E"
-WALLET_TRON = "TADavZEHddjYMQcL2cnaFadFVKAUmP9wMw"
+WALLET = settings.pay_to_address_evm
+WALLET_TRON = settings.pay_to_address_tron
 DOMAIN = "https://agent-api-ai.duckdns.org"
 GITHUB = "https://github.com/AntoNYak0/ai-agent-api"
 
@@ -49,6 +51,7 @@ AI_UPTO_SERVICES = {
         "path": "/api/audit",
         "description": "Security scan with OWASP Top 10 + SWC Registry taxonomy",
         "max_price": "$0.05",
+        "max_tokens": 4000,
         "base_microunits": 20_000,
         "min_price_microunits": 10_000,
         "input": {"code": "string", "context": "string (optional)"},
@@ -59,6 +62,7 @@ AI_UPTO_SERVICES = {
         "path": "/api/refactor",
         "description": "Refactor legacy code — DRY, SOLID, modern patterns",
         "max_price": "$0.05",
+        "max_tokens": 6000,
         "base_microunits": 30_000,
         "min_price_microunits": 10_000,
         "input": {"code": "string", "instructions": "string (optional)", "context": "string (optional)"},
@@ -69,6 +73,7 @@ AI_UPTO_SERVICES = {
         "path": "/api/docs",
         "description": "Generate technical docs with architecture, signatures, examples",
         "max_price": "$0.03",
+        "max_tokens": 6000,
         "base_microunits": 10_000,
         "min_price_microunits": 5_000,
         "input": {"code": "string", "context": "string (optional)"},
@@ -80,6 +85,7 @@ AI_UPTO_SERVICES = {
         "path": "/api/defi-analyze",
         "description": "DeFi protocol analysis — risks, tokenomics, architecture",
         "max_price": "$0.04",
+        "max_tokens": 4000,
         "base_microunits": 20_000,
         "min_price_microunits": 10_000,
         "input": {"protocol": "string", "chain": "string (optional)",
@@ -91,6 +97,7 @@ AI_UPTO_SERVICES = {
         "path": "/api/trading-signal",
         "description": "Crypto trading analytics — qualitative, NOT financial advice",
         "max_price": "$0.03",
+        "max_tokens": 2500,
         "base_microunits": 10_000,
         "min_price_microunits": 5_000,
         "input": {"asset": "string", "timeframe": "string (optional)", "additional_info": "string (optional)"},
@@ -102,6 +109,7 @@ AI_UPTO_SERVICES = {
         "path": "/api/solidity-scan",
         "description": "Solidity vulnerability scanner — 36 SWC checks + DeFi exploits",
         "max_price": "$0.08",
+        "max_tokens": 6000,
         "base_microunits": 40_000,
         "min_price_microunits": 20_000,
         "input": {"code": "string", "context": "string (optional)"},
@@ -112,6 +120,7 @@ AI_UPTO_SERVICES = {
         "path": "/api/nl-to-sql",
         "description": "Convert natural language to SQL query",
         "max_price": "$0.03",
+        "max_tokens": 1500,
         "base_microunits": 10_000,
         "min_price_microunits": 5_000,
         "input": {"query": "string"},
@@ -121,6 +130,7 @@ AI_UPTO_SERVICES = {
         "path": "/api/sql-to-nl",
         "description": "Explain SQL query in plain English",
         "max_price": "$0.02",
+        "max_tokens": 1500,
         "base_microunits": 10_000,
         "min_price_microunits": 5_000,
         "input": {"sql": "string"},
@@ -131,6 +141,7 @@ AI_UPTO_SERVICES = {
         "path": "/api/git-summarize",
         "description": "Summarize git diff into PR description",
         "max_price": "$0.02",
+        "max_tokens": 2000,
         "base_microunits": 10_000,
         "min_price_microunits": 5_000,
         "input": {"diff": "string"},
@@ -141,6 +152,7 @@ AI_UPTO_SERVICES = {
         "path": "/api/translate-code",
         "description": "Translate code between languages (Python, TS, Rust, Go, Solidity)",
         "max_price": "$0.05",
+        "max_tokens": 6000,
         "base_microunits": 20_000,
         "min_price_microunits": 10_000,
         "input": {"code": "string", "source_lang": "string", "target_lang": "string"},
@@ -150,6 +162,7 @@ AI_UPTO_SERVICES = {
         "path": "/api/whale-tracker",
         "description": "Whale movement analysis — large USDC transfers on Base/Arbitrum",
         "max_price": "$0.03",
+        "max_tokens": 2500,
         "base_microunits": 15_000,
         "min_price_microunits": 7_500,
         "input": {"asset": "string", "wallet_address": "string (optional)", "timeframe": "string (optional)"},
@@ -159,6 +172,7 @@ AI_UPTO_SERVICES = {
         "path": "/api/smart-money",
         "description": "Smart money wallet analysis — win rate, patterns, profitability",
         "max_price": "$0.05",
+        "max_tokens": 2500,
         "base_microunits": 25_000,
         "min_price_microunits": 12_500,
         "input": {"wallet_address": "string", "chain": "string (optional)"},
@@ -168,6 +182,7 @@ AI_UPTO_SERVICES = {
         "path": "/api/agent-audit",
         "description": "Full AI agent security audit — code, behavior, trust score",
         "max_price": "$0.50",
+        "max_tokens": 6000,
         "base_microunits": 250_000,
         "min_price_microunits": 125_000,
         "input": {"agent_code": "string", "behavior_description": "string (optional)", "agent_name": "string (optional)"},
@@ -177,6 +192,7 @@ AI_UPTO_SERVICES = {
         "path": "/api/contract-verify",
         "description": "Smart contract formal verification — 36 SWC + DeFi exploits",
         "max_price": "$1.00",
+        "max_tokens": 8000,
         "base_microunits": 500_000,
         "min_price_microunits": 250_000,
         "input": {"contract_code": "string", "contract_name": "string (optional)", "network": "string (optional)"},
@@ -186,6 +202,7 @@ AI_UPTO_SERVICES = {
         "path": "/api/security-score",
         "description": "Rapid security assessment — quick score and risk level",
         "max_price": "$0.10",
+        "max_tokens": 2500,
         "base_microunits": 50_000,
         "min_price_microunits": 25_000,
         "input": {"code": "string", "description": "string (optional)"},
@@ -195,6 +212,7 @@ AI_UPTO_SERVICES = {
         "path": "/api/data-feed",
         "description": "Structured data feed on any topic — machine-readable JSON",
         "max_price": "$0.02",
+        "max_tokens": 2000,
         "base_microunits": 10_000,
         "min_price_microunits": 5_000,
         "input": {"topic": "string", "format": "string (optional)"},
@@ -204,6 +222,7 @@ AI_UPTO_SERVICES = {
         "path": "/api/price-feed",
         "description": "AI-enhanced token price analysis with support/resistance levels",
         "max_price": "$0.02",
+        "max_tokens": 2000,
         "base_microunits": 10_000,
         "min_price_microunits": 5_000,
         "input": {"token": "string"},
@@ -213,6 +232,7 @@ AI_UPTO_SERVICES = {
         "path": "/api/debug-log",
         "description": "CI/CD error log analysis — root cause and fix suggestions",
         "max_price": "$0.03",
+        "max_tokens": 2500,
         "base_microunits": 10_000,
         "min_price_microunits": 5_000,
         "input": {"log": "string", "context": "string (optional)"},
@@ -225,6 +245,7 @@ EXACT_SERVICES = {
         "path": "/api/validate-json",
         "description": "Validate JSON/YAML structure, schema, types",
         "price": "$0.0005",
+        "max_tokens": 500,
         "microunits": 500,
         "input": {"data": "string", "schema": "string (optional)"},
         "output": {"valid": "boolean", "errors": "[{line,message,fix}]", "warnings": "[{line,message}]"},
@@ -233,6 +254,7 @@ EXACT_SERVICES = {
         "path": "/api/classify-text",
         "description": "Classify text — sentiment, category, keywords, language",
         "price": "$0.001",
+        "max_tokens": 500,
         "microunits": 1000,
         "input": {"text": "string", "categories": "string (optional)"},
         "output": {"sentiment": "positive|negative|neutral", "category": "string",
@@ -242,6 +264,7 @@ EXACT_SERVICES = {
         "path": "/api/extract-data",
         "description": "Extract structured data — names, emails, phones, URLs, dates, amounts",
         "price": "$0.005",
+        "max_tokens": 1500,
         "microunits": 5000,
         "input": {"text": "string"},
         "output": {"entities": "[{type,value,confidence}]"},
@@ -250,6 +273,7 @@ EXACT_SERVICES = {
         "path": "/api/generate-regex",
         "description": "Generate regex pattern from description with test cases",
         "price": "$0.002",
+        "max_tokens": 800,
         "microunits": 2000,
         "input": {"description": "string"},
         "output": {"pattern": "string", "flags": "string",
@@ -259,6 +283,7 @@ EXACT_SERVICES = {
         "path": "/api/format-data",
         "description": "Convert data between CSV, JSON, YAML formats",
         "price": "$0.003",
+        "max_tokens": 800,
         "microunits": 3000,
         "input": {"data": "string", "source_format": "csv|json|yaml", "target_format": "csv|json|yaml"},
         "output": {"converted": "string", "format": "string", "warnings": "[string]"},
@@ -267,6 +292,7 @@ EXACT_SERVICES = {
         "path": "/api/summarize",
         "description": "Summarize text to N words, extract key points",
         "price": "$0.002",
+        "max_tokens": 1000,
         "microunits": 2000,
         "input": {"text": "string", "max_length": "integer (optional)"},
         "output": {"summary": "string", "word_count": "integer", "key_points": "[string]"},
@@ -275,6 +301,53 @@ EXACT_SERVICES = {
 
 ALL_SERVICES = {**{f"POST {v['path']}": v for v in AI_UPTO_SERVICES.values()},
                 **{f"POST {v['path']}": v for v in EXACT_SERVICES.values()}}
+
+# Build lookup: MCP tool name → pricing info (for workflow chain validation)
+_TOOL_NAMES = {
+    # AI upto services — MCP names use hyphens
+    "audit": "audit", "refactor": "refactor", "docs": "docs",
+    "defi": "defi_analyze", "trading": "trading_signal",
+    "solidity-scan": "solidity_scan", "nl-to-sql": "nl_to_sql",
+    "sql-to-nl": "sql_to_nl", "git-summarize": "git_summarize",
+    "translate-code": "translate_code", "whale-tracker": "whale_tracker",
+    "smart-money": "smart_money", "price-feed": "price_feed",
+    "agent-audit": "agent_audit", "contract-verify": "contract_verify",
+    "security-score": "security_score", "data-feed": "data_feed",
+    "debug-log": "debug_log",
+    # Exact services — MCP names use hyphens
+    "validate-json": "validate_json", "classify-text": "classify_text",
+    "extract-data": "extract_data", "generate-regex": "generate_regex",
+    "format-data": "format_data", "summarize": "summarize",
+    # Composite skills
+    "defi-research": None, "code-health-check": None,
+    "smart-contract-audit": None, "data-pipeline": None,
+    "run-workflow": None,
+}
+
+# Reverse: pricing_key → MCP tool name
+_PRICING_TO_TOOL = {v: k for k, v in _TOOL_NAMES.items() if v is not None}
+
+
+def get_tool_input_schema(tool_name: str) -> dict | None:
+    """Get input schema for a tool by MCP name (e.g. 'audit' → {'code': 'string', ...})."""
+    pricing_key = _TOOL_NAMES.get(tool_name)
+    if pricing_key is None:
+        return None
+    svc = AI_UPTO_SERVICES.get(pricing_key) or EXACT_SERVICES.get(pricing_key)
+    if svc:
+        return dict(svc.get("input", {}))
+    return None
+
+
+def get_tool_output_schema(tool_name: str) -> dict | None:
+    """Get output schema for a tool by MCP name."""
+    pricing_key = _TOOL_NAMES.get(tool_name)
+    if pricing_key is None:
+        return None
+    svc = AI_UPTO_SERVICES.get(pricing_key) or EXACT_SERVICES.get(pricing_key)
+    if svc:
+        return dict(svc.get("output", {}))
+    return None
 
 # Composite skills (chain multiple tools)
 COMPOSITE_SKILLS = {
@@ -303,3 +376,17 @@ COMPOSITE_SKILLS = {
         "input": {"text": "string", "target_format": "csv|json|yaml"},
     },
 }
+
+
+def get_max_tokens(service_key: str) -> int:
+    """Return max_tokens for a service by pricing key or MCP tool name."""
+    svc = AI_UPTO_SERVICES.get(service_key) or EXACT_SERVICES.get(service_key)
+    if svc and "max_tokens" in svc:
+        return svc["max_tokens"]
+    # Also try via MCP tool name mapping
+    pricing_key = _TOOL_NAMES.get(service_key)
+    if pricing_key:
+        svc = AI_UPTO_SERVICES.get(pricing_key) or EXACT_SERVICES.get(pricing_key)
+        if svc and "max_tokens" in svc:
+            return svc["max_tokens"]
+    return 2048

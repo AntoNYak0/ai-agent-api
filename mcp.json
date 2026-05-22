@@ -2,7 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/specification/main/schema/mcp.json",
   "name": "ai-agent-api",
   "version": "2.0.0",
-  "description": "20 pay-per-call AI services via x402 USDC micropayments — code audit, refactoring, DeFi analysis, Solidity scanner, SQL/NL tools, micro-tasks, composite workflows. Powered by DeepSeek V4 Pro.",
+  "description": "29 pay-per-call AI services via x402 USDC micropayments — code audit, refactoring, DeFi analysis, Solidity scanner, SQL/NL tools, whale tracking, smart money, agent audit, contract verification, micro-tasks, composite workflows. Powered by DeepSeek V4 Pro.",
   "transport": {
     "type": "sse",
     "url": "https://agent-api-ai.duckdns.org/mcp/sse"
@@ -28,6 +28,14 @@
     {"name": "sql-to-nl", "pricing": "$0.005–$0.02", "category": "sql"},
     {"name": "git-summarize", "pricing": "$0.005–$0.02", "category": "dev-tools"},
     {"name": "translate-code", "pricing": "$0.01–$0.05", "category": "dev-tools"},
+    {"name": "whale-tracker", "pricing": "$0.015–$0.03", "category": "defi"},
+    {"name": "smart-money", "pricing": "$0.025–$0.05", "category": "defi"},
+    {"name": "price-feed", "pricing": "$0.01–$0.02", "category": "defi"},
+    {"name": "agent-audit", "pricing": "$0.25–$0.50", "category": "security"},
+    {"name": "contract-verify", "pricing": "$0.50–$1.00", "category": "security"},
+    {"name": "security-score", "pricing": "$0.05–$0.10", "category": "security"},
+    {"name": "data-feed", "pricing": "$0.01–$0.02", "category": "data"},
+    {"name": "debug-log", "pricing": "$0.01–$0.03", "category": "dev-tools"},
     {"name": "validate-json", "pricing": "$0.0005", "category": "micro"},
     {"name": "classify-text", "pricing": "$0.001", "category": "micro"},
     {"name": "extract-data", "pricing": "$0.005", "category": "micro"},
@@ -37,7 +45,8 @@
     {"name": "defi-research", "pricing": "$0.08", "category": "composite"},
     {"name": "code-health-check", "pricing": "$0.10", "category": "composite"},
     {"name": "smart-contract-audit", "pricing": "$0.10", "category": "composite"},
-    {"name": "data-pipeline", "pricing": "$0.05", "category": "composite"}
+    {"name": "data-pipeline", "pricing": "$0.05", "category": "composite"},
+    {"name": "run-workflow", "pricing": "variable", "category": "composite"}
   ],
   "contact": {
     "email": "admin@agent-api-ai.duckdns.org",
@@ -46,5 +55,5 @@
   "homepage": "https://agent-api-ai.duckdns.org",
   "repository": "https://github.com/AntoNYak0/ai-agent-api",
   "license": "MIT",
-  "keywords": ["ai", "code-audit", "solidity", "defi", "sql", "microtasks", "x402", "usdc"]
+  "keywords": ["ai", "code-audit", "solidity", "defi", "sql", "microtasks", "x402", "usdc", "whale-tracking", "smart-money", "agent-audit", "contract-verification", "security-score", "data-feed", "debug-log"]
 }

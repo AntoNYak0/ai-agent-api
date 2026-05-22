@@ -8,7 +8,7 @@ import time
 
 HOST = "77.239.107.30"
 USER = "root"
-PASSWORD = "zW8rW6eU3rgZ"
+PASSWORD = os.environ.get("VPS_PASSWORD", "")
 
 def run_ssh_command(remote_cmd, timeout=60):
     """Run a command on the VPS, return stdout, stderr."""

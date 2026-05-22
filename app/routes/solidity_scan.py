@@ -3,11 +3,10 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from app.routes import get_network, get_tx
 from app.models import SolidityScanRequest, ServiceResponse
-from app.services.deepseek import deepseek_completion
 from app.services.cache import cached_completion
 from app.services import credits, analytics
 from app.prompts.solidity_scan import SOLIDITY_SCAN_PROMPT
-from app.pricing import round_up_cents
+from app.pricing import round_up_cents, get_max_tokens, PER_1K_TOKENS_MICROUNITS
 from app.x402_setup import settle_actual_usage, validate_min_price
 
 MIN_PRICE_MICROUNITS = 20_000
@@ -33,8 +32,8 @@ async def solidity_scan_endpoint(request: Request, body: SolidityScanRequest):
             analytics.track("solidity-scan", "api_key", False, 0, 0)
             return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
 
-    result, tokens = await cached_completion("solidity-scan", body.code, SOLIDITY_SCAN_PROMPT, body.context, json_mode=True)
-    microunits = BASE_MICROUNITS + int((tokens / 1000) * 3000)
+    result, tokens = await cached_completion("solidity-scan", body.code, SOLIDITY_SCAN_PROMPT, body.context, json_mode=True, max_tokens=get_max_tokens("solidity-scan"))
+    microunits = BASE_MICROUNITS + int((tokens / 1000) * PER_1K_TOKENS_MICROUNITS)
     if is_api_key:
         cost_cents = round_up_cents((microunits / 10000) * CREDIT_MULTIPLIER)
         credits.spend_credits(request.state.human_api_key, cost_cents)

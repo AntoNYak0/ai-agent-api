@@ -80,6 +80,7 @@ def generate_api_key() -> str:
         data["keys"][_hash_key(key)] = {
             "credits": 0,
             "total_spent_credits": 0,
+            "earned_credits": 0,
             "created_at": time.time(),
             "last_used": None,
         }
@@ -148,11 +149,30 @@ def get_balance(api_key: str) -> dict | None:
     entry = data["keys"][storage_key]
     return {
         "credits": entry["credits"],
+        "earned_credits": entry.get("earned_credits", 0),
         "usd_equivalent": entry["credits"] / CREDITS_PER_CENT / 100,
         "total_spent_usd": entry["total_spent_credits"] / CREDITS_PER_CENT / 100,
+        "earned_usd": entry.get("earned_credits", 0) / CREDITS_PER_CENT / 100,
         "created_at": entry["created_at"],
         "last_used": entry["last_used"],
     }
+
+
+def credit_rev_share(api_key: str, amount_cents: int) -> int:
+    """Credit author with their rev-share earnings. Returns new earned_credits total."""
+    credits_to_add = amount_cents * CREDITS_PER_CENT
+    with _lock:
+        data = _load()
+        storage_key = _resolve_key(data, api_key)
+        if not storage_key:
+            return 0
+        entry = data["keys"][storage_key]
+        if "earned_credits" not in entry:
+            entry["earned_credits"] = 0
+        entry["earned_credits"] += credits_to_add
+        entry["credits"] += credits_to_add  # earned credits are immediately spendable
+        _save(data)
+    return entry["earned_credits"]
 
 
 def get_stats() -> dict:

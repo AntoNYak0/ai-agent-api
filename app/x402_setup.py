@@ -1,3 +1,4 @@
+import json
 import logging
 
 from fastapi import FastAPI
@@ -23,9 +24,6 @@ CDP_FACILITATOR_URL = "https://api.cdp.coinbase.com/platform/v2/x402"
 PAYAI_FACILITATOR_URL = "https://facilitator.payai.network"
 CHAOSCHAIN_FACILITATOR_URL = "https://facilitator.chaoscha.in"
 
-# Token rate: $0.003 per 1K tokens (DeepSeek cost ~$0.0014/1K, x2 margin)
-PER_1K_TOKENS_MICROUNITS = 3000
-
 
 def validate_min_price(request, min_microunits: int):
     """Check x402 payment has sufficient authorized amount BEFORE calling AI.
@@ -46,7 +44,7 @@ def validate_min_price(request, min_microunits: int):
     try:
         authorized = int(request.state.payment_requirements.amount)
     except (ValueError, TypeError):
-        return True, None
+        return False, {"error": "payment_verification_failed", "message": "Unable to parse payment amount. Ensure payment-signature header is valid."}
 
     if authorized < min_microunits:
         mins = min_microunits / 1e6
@@ -81,37 +79,16 @@ async def settle_actual_usage(request, actual_microunits: int):
 # Solana mainnet (reserved for future use)
 SOLANA_NET = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"
 
-# AI services: upto pricing (pay per actual usage)
-_UPTO_SERVICES = {
-    "POST /api/audit":          ("$0.05", "Security scan with OWASP Top 10 + SWC Registry taxonomy"),
-    "POST /api/refactor":       ("$0.05", "Refactor legacy code — DRY, SOLID, modern patterns"),
-    "POST /api/docs":           ("$0.03", "Generate technical docs with architecture, signatures, examples"),
-    "POST /api/defi-analyze":   ("$0.04", "DeFi protocol analysis: risks, tokenomics, architecture"),
-    "POST /api/trading-signal": ("$0.03", "Crypto trading analytics — qualitative, NOT financial advice"),
-    "POST /api/solidity-scan":  ("$0.08", "Solidity vulnerability scanner — 36 SWC checks + DeFi exploits"),
-    "POST /api/nl-to-sql":      ("$0.03", "Convert natural language descriptions to SQL queries"),
-    "POST /api/sql-to-nl":      ("$0.02", "Explain SQL queries in plain English"),
-    "POST /api/git-summarize":  ("$0.02", "Summarize git diff into PR description"),
-    "POST /api/translate-code": ("$0.05", "Translate code between languages (Python, TS, Rust, Go, Solidity)"),
-    "POST /api/whale-tracker":   ("$0.03", "Whale movement analysis — large USDC transfers on Base/Arbitrum"),
-    "POST /api/smart-money":     ("$0.05", "Smart money wallet analysis — win rate, patterns, profitability"),
-    "POST /api/price-feed":      ("$0.02", "AI-enhanced token price analysis with support/resistance levels"),
-    "POST /api/agent-audit":     ("$0.50", "Full AI agent security audit — code, behavior, trust score"),
-    "POST /api/contract-verify": ("$1.00", "Smart contract formal verification — 36 SWC + DeFi exploits"),
-    "POST /api/security-score":  ("$0.10", "Rapid security assessment — quick score and risk level"),
-    "POST /api/data-feed":       ("$0.02", "Structured data feed on any topic — machine-readable JSON"),
-    "POST /api/debug-log":       ("$0.03", "CI/CD error log analysis — root cause and fix suggestions"),
-}
+# Generated from pricing.py (single source of truth) — NO hardcoded duplicates
+from app.pricing import ALL_SERVICES
 
-# Micro-tasks: exact pricing (flat fee)
-_EXACT_SERVICES = {
-    "POST /api/validate-json":  ("$0.0005", "Validate JSON/YAML structure, schema, types"),
-    "POST /api/classify-text":  ("$0.001",  "Classify text: sentiment, category, keywords, language"),
-    "POST /api/extract-data":   ("$0.005",  "Extract structured data: names, emails, phones, URLs, dates"),
-    "POST /api/generate-regex": ("$0.002",  "Generate regex pattern from description with test cases"),
-    "POST /api/format-data":    ("$0.003",  "Convert data: CSV to JSON, JSON to YAML, etc."),
-    "POST /api/summarize":      ("$0.002",  "Summarize text to N words, extract key points"),
-}
+_UPTO_SERVICES = {}
+_EXACT_SERVICES = {}
+for _route_key, _info in ALL_SERVICES.items():
+    if "max_price" in _info:
+        _UPTO_SERVICES[_route_key] = (_info["max_price"], _info["description"])
+    elif "price" in _info:
+        _EXACT_SERVICES[_route_key] = (_info["price"], _info["description"])
 
 # Input schemas for Bazaar discovery
 _SCHEMAS = {
@@ -269,25 +246,6 @@ def configure_x402(
             network=network,
         )
 
-    def _bazaar_schema(route_key: str) -> dict:
-        """Build Bazaar extension inputSchema for PayAI validation."""
-        props = _SCHEMAS.get(route_key, {})
-        required = [k for k, v in props.items() if "optional" not in v.lower()]
-        schema_props = {}
-        for k, v in props.items():
-            type_str = "string"
-            if "integer" in v.lower():
-                type_str = "integer"
-            elif "boolean" in v.lower():
-                type_str = "boolean"
-            desc = v.replace(" (optional)", "").replace("(optional)", "")
-            schema_props[k] = {"type": type_str, "description": desc.strip()}
-        return {
-            "type": "object",
-            "properties": schema_props,
-            "required": required,
-        }
-
     routes: dict[str, RouteConfig] = {}
 
     for route_key, (price, desc) in _UPTO_SERVICES.items():
@@ -330,7 +288,7 @@ def configure_x402(
             amount = getattr(request.state, "x402_settled_amount", 0)
             response.headers["PAYMENT-RESPONSE"] = "true"
             response.headers["X-Payment-Amount"] = f"${amount / 1e6:.6f} USDC"
-            response.headers["Settlement-Overrides"] = __import__("json").dumps({"amount": str(amount)})
+            response.headers["Settlement-Overrides"] = json.dumps({"amount": str(amount)})
             logger.info("PAYMENT-RESPONSE: settlement override %d microunits", amount)
         return response
 

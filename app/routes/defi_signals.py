@@ -6,7 +6,7 @@ from app.models import BaseModel, Field, ServiceResponse
 from app.services.cache import cached_completion
 from app.services import credits, analytics
 from app.prompts.defi_signals import WHALE_TRACKER_PROMPT, SMART_MONEY_PROMPT, PRICE_FEED_PROMPT
-from app.pricing import round_up_cents
+from app.pricing import round_up_cents, get_max_tokens, PER_1K_TOKENS_MICROUNITS
 from app.x402_setup import settle_actual_usage, validate_min_price
 
 router = APIRouter()
@@ -52,9 +52,9 @@ async def whale_tracker(request: Request, body: WhaleTrackerRequest):
             return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
 
     content = f"Asset: {body.asset}\nWallet: {body.wallet_address or 'auto-detect'}\nTimeframe: {body.timeframe or '24h'}"
-    result, tokens = await cached_completion("whale-tracker", content, WHALE_TRACKER_PROMPT, None, json_mode=True)
+    result, tokens = await cached_completion("whale-tracker", content, WHALE_TRACKER_PROMPT, None, json_mode=True, max_tokens=get_max_tokens("whale-tracker"))
 
-    microunits = WHALE_BASE + int((tokens / 1000) * 3000)
+    microunits = WHALE_BASE + int((tokens / 1000) * PER_1K_TOKENS_MICROUNITS)
     if is_api_key:
         cost_cents = round_up_cents((microunits / 10000) * CREDIT_MULTIPLIER)
         credits.spend_credits(request.state.human_api_key, cost_cents)
@@ -81,9 +81,9 @@ async def smart_money(request: Request, body: SmartMoneyRequest):
             return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
 
     content = f"Wallet: {body.wallet_address}\nChain: {body.chain or 'ethereum'}"
-    result, tokens = await cached_completion("smart-money", content, SMART_MONEY_PROMPT, None, json_mode=True)
+    result, tokens = await cached_completion("smart-money", content, SMART_MONEY_PROMPT, None, json_mode=True, max_tokens=get_max_tokens("smart-money"))
 
-    microunits = SMART_BASE + int((tokens / 1000) * 3000)
+    microunits = SMART_BASE + int((tokens / 1000) * PER_1K_TOKENS_MICROUNITS)
     if is_api_key:
         cost_cents = round_up_cents((microunits / 10000) * CREDIT_MULTIPLIER)
         credits.spend_credits(request.state.human_api_key, cost_cents)
@@ -110,9 +110,9 @@ async def price_feed(request: Request, body: PriceFeedRequest):
             return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
 
     content = f"Token: {body.token}"
-    result, tokens = await cached_completion("price-feed", content, PRICE_FEED_PROMPT, None, json_mode=True)
+    result, tokens = await cached_completion("price-feed", content, PRICE_FEED_PROMPT, None, json_mode=True, max_tokens=get_max_tokens("price-feed"))
 
-    microunits = PRICE_BASE + int((tokens / 1000) * 3000)
+    microunits = PRICE_BASE + int((tokens / 1000) * PER_1K_TOKENS_MICROUNITS)
     if is_api_key:
         cost_cents = round_up_cents((microunits / 10000) * CREDIT_MULTIPLIER)
         credits.spend_credits(request.state.human_api_key, cost_cents)

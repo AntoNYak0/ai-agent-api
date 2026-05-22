@@ -5,9 +5,10 @@
 name: ai-agent-api
 version: "2.0.0"
 description: >
-  20 pay-per-call AI services via x402 USDC micropayments.
+  29 pay-per-call AI services via x402 USDC micropayments.
   Code audit, refactoring, DeFi analysis, Solidity scanner,
-  SQL/NL tools, micro-tasks, and composite workflows.
+  SQL/NL tools, whale tracking, smart money, agent audit,
+  contract verification, micro-tasks, and composite workflows.
   Powered by DeepSeek V4 Pro (1M context).
   No API key needed — agents pay per call in USDC.
 
@@ -66,6 +67,41 @@ tools:
     description: Translate code between languages (Python, TS, Rust, Go, Solidity)
     pricing: $0.01-$0.05 USDC
 
+  # DeFi Signals (upto pricing)
+  - name: whale-tracker
+    description: Track whale wallet movements — large USDC transfers on Base/Arbitrum
+    pricing: $0.015-$0.03 USDC
+
+  - name: smart-money
+    description: Analyze smart money wallet behavior — win rate, PnL patterns
+    pricing: $0.025-$0.05 USDC
+
+  - name: price-feed
+    description: AI-enhanced token price analysis with support/resistance levels
+    pricing: $0.01-$0.02 USDC
+
+  # Security (upto pricing)
+  - name: agent-audit
+    description: Full AI agent security audit — code, behavior, trust score
+    pricing: $0.25-$0.50 USDC
+
+  - name: contract-verify
+    description: Smart contract formal verification — 36 SWC + DeFi exploits
+    pricing: $0.50-$1.00 USDC
+
+  - name: security-score
+    description: Rapid security assessment — quick score and risk level
+    pricing: $0.05-$0.10 USDC
+
+  # Data & DevOps
+  - name: data-feed
+    description: Structured data feed on any topic — machine-readable JSON
+    pricing: $0.01-$0.02 USDC
+
+  - name: debug-log
+    description: CI/CD error log analysis — root cause and fix suggestions
+    pricing: $0.01-$0.03 USDC
+
   # Micro-tasks (exact pricing)
   - name: validate-json
     description: Validate JSON/YAML structure, schema, types
@@ -107,6 +143,10 @@ tools:
   - name: data-pipeline
     description: Data processing pipeline — extract entities, convert format, summarize
     pricing: $0.05 USDC
+
+  - name: run-workflow
+    description: Execute a registered composite workflow by ID
+    pricing: variable (set by workflow author)
 
 contact:
   email: admin@agent-api-ai.duckdns.org

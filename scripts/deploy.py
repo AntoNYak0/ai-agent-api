@@ -56,7 +56,7 @@ files = [
     "scripts/integration_test.py",
 ]
 
-local_base = r"c:\Users\Admin\Desktop\Рынок агентов _ Главная_files\agent-api"
+local_base = os.environ.get("AGENT_API_SRC", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 ssh = paramiko.SSHClient()
 ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())

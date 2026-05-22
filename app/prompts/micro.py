@@ -47,7 +47,7 @@ OUTPUT (JSON only, no markdown):
 Output ONLY the JSON object. No additional text."""
 
 TRANSLATE_CODE_PROMPT = """\
-ROLE: Code translator from {source_lang} to {target_lang}.
+ROLE: Code translator from __SOURCE_LANG__ to __TARGET_LANG__.
 
 TASK: Translate the provided code preserving exact logic and behavior. Use idiomatic patterns of the target language. Handle language-specific constructs appropriately (e.g. async/await, type systems, memory management).
 
@@ -81,12 +81,12 @@ Output ONLY the JSON object. No additional text."""
 FORMAT_DATA_PROMPT = """\
 ROLE: Data format converter.
 
-TASK: Convert the provided data from {source_format} to {target_format}. Preserve all values exactly. Handle nested structures, arrays, and special characters.
+TASK: Convert the provided data from __SOURCE_FORMAT__ to __TARGET_FORMAT__. Preserve all values exactly. Handle nested structures, arrays, and special characters.
 
 OUTPUT (JSON only, no markdown):
 {
   "converted": "the converted data as string",
-  "format": "{target_format}",
+  "format": "__TARGET_FORMAT__",
   "warnings": ["any data loss or conversion issues"]
 }
 Output ONLY the JSON object. No additional text."""
@@ -94,11 +94,11 @@ Output ONLY the JSON object. No additional text."""
 SUMMARIZE_PROMPT = """\
 ROLE: Text summarizer.
 
-TASK: Summarize the provided text in approximately {max_length} words. Extract key points. Support styles: "bullet" for list form, "abstractive" for narrative, "extractive" for direct quotes.
+TASK: Summarize the provided text in approximately __MAX_LENGTH__ words. Extract key points. Support styles: "bullet" for list form, "abstractive" for narrative, "extractive" for direct quotes.
 
 OUTPUT (JSON only, no markdown):
 {
-  "summary": "the summarized text (~{max_length} words)",
+  "summary": "the summarized text (~__MAX_LENGTH__ words)",
   "word_count": "actual word count of summary",
   "key_points": ["3-5 main takeaways"],
   "style": "bullet|abstractive|extractive"

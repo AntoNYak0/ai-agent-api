@@ -5,7 +5,7 @@ from app.routes import get_network, get_tx
 from app.models import BaseModel, Field, ServiceResponse
 from app.services.cache import cached_completion
 from app.services import credits, analytics
-from app.pricing import round_up_cents
+from app.pricing import round_up_cents, get_max_tokens, PER_1K_TOKENS_MICROUNITS
 from app.prompts.security import AGENT_AUDIT_PROMPT, CONTRACT_VERIFY_PROMPT, SECURITY_SCORE_PROMPT
 from app.x402_setup import settle_actual_usage, validate_min_price
 
@@ -53,9 +53,9 @@ async def agent_audit(request: Request, body: AgentAuditRequest):
             return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
 
     content = f"Agent: {body.agent_name or 'unnamed'}\nBehavior: {body.behavior_description or 'not provided'}\n\nCode:\n{body.agent_code}"
-    result, tokens = await cached_completion("agent-audit", content, AGENT_AUDIT_PROMPT, None, json_mode=True)
+    result, tokens = await cached_completion("agent-audit", content, AGENT_AUDIT_PROMPT, None, json_mode=True, max_tokens=get_max_tokens("agent-audit"))
 
-    microunits = AGENT_AUDIT_BASE + int((tokens / 1000) * 3000)
+    microunits = AGENT_AUDIT_BASE + int((tokens / 1000) * PER_1K_TOKENS_MICROUNITS)
     if is_api_key:
         cost_cents = round_up_cents((microunits / 10000) * CREDIT_MULTIPLIER)
         credits.spend_credits(request.state.human_api_key, cost_cents)
@@ -82,9 +82,9 @@ async def contract_verify(request: Request, body: ContractVerifyRequest):
             return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
 
     content = f"Contract: {body.contract_name or 'unnamed'}\nNetwork: {body.network or 'ethereum'}\n\nCode:\n{body.contract_code}"
-    result, tokens = await cached_completion("contract-verify", content, CONTRACT_VERIFY_PROMPT, None, json_mode=True)
+    result, tokens = await cached_completion("contract-verify", content, CONTRACT_VERIFY_PROMPT, None, json_mode=True, max_tokens=get_max_tokens("contract-verify"))
 
-    microunits = CONTRACT_VERIFY_BASE + int((tokens / 1000) * 3000)
+    microunits = CONTRACT_VERIFY_BASE + int((tokens / 1000) * PER_1K_TOKENS_MICROUNITS)
     if is_api_key:
         cost_cents = round_up_cents((microunits / 10000) * CREDIT_MULTIPLIER)
         credits.spend_credits(request.state.human_api_key, cost_cents)
@@ -111,9 +111,9 @@ async def security_score(request: Request, body: SecurityScoreRequest):
             return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
 
     content = f"Code:\n{body.code}\n\nDescription: {body.description or 'not provided'}"
-    result, tokens = await cached_completion("security-score", content, SECURITY_SCORE_PROMPT, None, json_mode=True)
+    result, tokens = await cached_completion("security-score", content, SECURITY_SCORE_PROMPT, None, json_mode=True, max_tokens=get_max_tokens("security-score"))
 
-    microunits = SECURITY_SCORE_BASE + int((tokens / 1000) * 3000)
+    microunits = SECURITY_SCORE_BASE + int((tokens / 1000) * PER_1K_TOKENS_MICROUNITS)
     if is_api_key:
         cost_cents = round_up_cents((microunits / 10000) * CREDIT_MULTIPLIER)
         credits.spend_credits(request.state.human_api_key, cost_cents)

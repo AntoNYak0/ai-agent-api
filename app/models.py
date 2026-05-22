@@ -33,7 +33,6 @@ class RefactorRequest(BaseModel):
 
 class DocsRequest(BaseModel):
     code: str = Field(max_length=MAX_CODE)
-    format: str = Field(default="markdown", max_length=MAX_FORMAT)
     context: str | None = Field(default=None, max_length=MAX_CONTEXT)
 
 
@@ -41,6 +40,7 @@ class DefiAnalyzeRequest(BaseModel):
     protocol: str = Field(max_length=MAX_NAME)
     chain: str = Field(default="Ethereum", max_length=MAX_LANG)
     details: str | None = Field(default=None, max_length=MAX_DETAILS)
+    onchain_data: str | None = Field(default=None, max_length=MAX_DETAILS)
 
 
 class TradingSignalRequest(BaseModel):

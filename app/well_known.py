@@ -6,6 +6,7 @@ from app.pricing import (
     AI_UPTO_SERVICES, EXACT_SERVICES,
     NETWORKS, WALLET, DOMAIN, GITHUB,
 )
+from app.services import workflow_registry
 
 router = APIRouter()
 
@@ -77,8 +78,12 @@ def _build_response_schema(info: dict) -> dict:
     props = {}
     for name, desc in info.get("response", {}).items():
         type_str = "string"
-        if desc.startswith("[") or desc.startswith("{") or desc == "boolean":
-            pass
+        if desc.startswith("["):
+            type_str = "array"
+        elif desc.startswith("{"):
+            type_str = "object"
+        elif desc == "boolean":
+            type_str = "boolean"
         if desc == "integer" or desc == "0.0-1.0":
             type_str = "number"
         props[name] = {"type": type_str, "description": desc}
@@ -234,7 +239,7 @@ async def x402_manifest():
             "scheme": "mixed",
             "networks": [
                 {"caip2": n["caip2"], "name": n["name"], "asset": n["asset"]}
-                for n in NETWORKS if n["caip2"] != "tron:0x2b6653dc"
+                for n in NETWORKS
             ],
         },
         "endpoints": endpoints,
@@ -285,7 +290,22 @@ async def agentic_market_services():
             ],
         })
 
-    return JSONResponse({"services": services})
+    # Registered composite workflows
+    workflows_list = []
+    for wf in workflow_registry.list_workflows():
+        workflows_list.append({
+            "id": wf["id"],
+            "name": wf["name"],
+            "description": wf["description"],
+            "chain": wf["chain"],
+            "price_cents": wf["price_cents"],
+            "platform_percent": wf.get("platform_percent", 15),
+            "author_share_cents": wf["price_cents"] * (100 - wf.get("platform_percent", 15)) // 100,
+            "enabled": wf.get("enabled", True),
+            "total_executions": wf.get("total_executions", 0),
+        })
+
+    return JSONResponse({"services": services, "workflows": workflows_list})
 
 
 @router.get("/.well-known/openapi.json")

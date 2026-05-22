@@ -32,7 +32,7 @@ Rate Limiter → Security Headers → Cache-Control → API Key → Versioning �
 
 Rate limiter skips `/health`, `/.well-known`, `/billing`. HEAD→GET middleware converts HEAD to GET for UptimeRobot monitors.
 
-**24 REST services** in `app/routes/` (11 route modules) + **20 MCP tools** in `app/mcp_server.py` (SSE at `/mcp/sse`). **7 well-known endpoints** in `app/well_known.py` for marketplace discovery.
+**24 REST services** in `app/routes/` (11 route modules) + **29 MCP tools** in `app/mcp_server.py` (SSE at `/mcp/sse`). **7 well-known endpoints** in `app/well_known.py` for marketplace discovery.
 
 **Cache:** SHA-256 LRU, 10min TTL, 1000 entries. **Replay protection:** `app/services/replay_guard.py`.
 
@@ -40,10 +40,10 @@ Rate limiter skips `/health`, `/.well-known`, `/billing`. HEAD→GET middleware 
 | File | Purpose |
 |---|---|
 | `app/main.py` | FastAPI app, CORS, middleware chain, 13 routers, dashboard HTML, health/metrics/prices endpoints |
-| `app/pricing.py` | **Single source of truth** — 24 service prices, 4 composite skills, networks, wallet, domain |
+| `app/pricing.py` | **Single source of truth** — 18 AI + 6 micro service prices, 5 composite skills, networks, wallet, domain |
 | `app/well_known.py` | 7 well-known endpoints: x402, openapi, server-card (Smithery), glama.json, agent-card, agentic-market-services, agent.json (AP2) |
 | `app/x402_setup.py` | x402 routes, facilitator setup, `validate_min_price()`, `settle_actual_usage()` |
-| `app/mcp_server.py` | FastMCP SSE — 20 tools, dual auth (x402 crypto + API key) |
+| `app/mcp_server.py` | FastMCP SSE — 29 tools, dual auth (x402 crypto + API key) |
 | `app/config.py` | Pydantic settings from `.env`: facilitator mode, feature flags, admin key |
 | `app/facilitator.py` | DirectFacilitator (EVM RPC) + TronFacilitator (TRC-20 via TronGrid) |
 | `app/payai_auth.py` | PayAI Ed25519 JWT auth |
@@ -53,6 +53,9 @@ Rate limiter skips `/health`, `/.well-known`, `/billing`. HEAD→GET middleware 
 | `app/services/rate_limiter.py` | 10 req/min per IP |
 | `app/services/blockchain_listener.py` | Auto-top-up listener for on-chain deposits |
 | `app/prompts/` | System prompts for all AI services (audit, refactor, docs, defi, trading, solidity, micro, security, data_feed, defi_signals) |
+| `app/services/workflow_registry.py` | Composite workflow catalog — in-memory + JSON persistence, author rev-share |
+| `app/services/cache.py` | SHA-256 LRU cache — 10min TTL, 1000 entries, avoids duplicate AI calls |
+| `app/routes/workflows.py` | Workflow CRUD — register, list, stats, execute composite chains |
 
 ## Facilitator Modes
 | Mode | Facilitator | Auth | KYC | Networks |

@@ -1,6 +1,6 @@
 # Setup Agent API MCP Server
 
-Add 20 pay-per-call AI tools to your agent in one command.
+Add 29 pay-per-call AI tools to your agent in one command.
 
 ## Quick Install
 
@@ -14,13 +14,14 @@ Then run `/setup-agent-api` in Claude Code.
 
 | Category | Tools | Pricing |
 |----------|-------|---------|
-| Code Security | audit, solidity-scan | $0.01-$0.08 USDC |
+| Code Security | audit, solidity-scan, agent-audit, contract-verify, security-score | $0.01-$1.00 USDC |
 | Code Quality | refactor, docs | $0.005-$0.05 USDC |
-| DeFi/Trading | defi, trading | $0.005-$0.04 USDC |
+| DeFi/Trading | defi, trading, whale-tracker, smart-money, price-feed | $0.005-$0.05 USDC |
 | SQL Tools | nl-to-sql, sql-to-nl | $0.005-$0.03 USDC |
-| Dev Tools | git-summarize, translate-code | $0.005-$0.05 USDC |
+| Dev Tools | git-summarize, translate-code, debug-log | $0.005-$0.05 USDC |
+| Data | data-feed | $0.01-$0.02 USDC |
 | Micro-tasks | validate-json, classify-text, extract-data, generate-regex, format-data, summarize | $0.0005-$0.005 USDC |
-| Composite | defi-research, code-health-check, smart-contract-audit, data-pipeline | $0.05-$0.10 USDC |
+| Composite | defi-research, code-health-check, smart-contract-audit, data-pipeline, run-workflow | $0.05-$0.10 USDC |
 
 ## Payment
 
