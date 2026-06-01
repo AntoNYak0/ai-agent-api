@@ -106,7 +106,7 @@ Composite skills (defi-research, code-health-check, smart-contract-audit, data-p
 | `app/config.py` | Pydantic settings from `.env`: facilitator mode, feature flags, admin key |
 | `app/facilitator.py` | DirectFacilitator (EVM RPC) + TronFacilitator (TRC-20 via TronGrid) |
 | `app/payai_auth.py` | PayAI Ed25519 JWT auth |
-| `app/services/deepseek.py` | Async OpenAI client, 3 retries, 13 regex prompt injection sanitization, sliding window monitoring |
+| `app/services/deepseek.py` | Async OpenAI client, 3 retries, 12 regex prompt injection sanitization, sliding window monitoring |
 | `app/services/credits.py` | API key CRUD, SHA-256 hashed, atomic writes |
 | `app/services/cache.py` | SHA-256 LRU cache — 10min TTL, 1000 entries, evicts oldest 10% |
 | `app/services/replay_guard.py` | Payment tx dedup (in-memory + SQLite) |

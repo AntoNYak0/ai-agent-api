@@ -14,7 +14,7 @@
 
 ## Prompt Injection Defense
 
-- **13 regex patterns** in `deepseek.py:_sanitize()` strip jailbreak attempts, role-switching, and prompt leakage.
+- **12 regex patterns** in `deepseek.py:_sanitize()` strip jailbreak attempts, role-switching, and prompt leakage.
 - All user input is sanitized before reaching the model.
 - **Monitoring:** In-memory sliding window (60s) tracks recent injection attempts. Escalation at 5 attempts/60s, hard block at 20 attempts/60s.
 - Cumulative `api_injection_blocks_total` counter exposed via Prometheus at `/health/metrics`.

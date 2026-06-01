@@ -147,7 +147,7 @@ For AI agents: read [AGENTS.md](AGENTS.md) for connection instructions.
 - **[SECURITY.md](SECURITY.md)** — full security policy
 - **`/health/security`** — real-time security status with attack detection
 - **`/health/metrics`** — Prometheus metrics for rate limits, replay blocks, injection attempts
-- **13 regex patterns** — prompt injection defense (jailbreak, role-switching, prompt leakage)
+- **12 regex patterns** — prompt injection defense (jailbreak, role-switching, prompt leakage)
 - **Rate limiting** — 10 req/min per IP + cumulative block counter
 - **Replay protection** — SQLite-backed payment tx dedup
 
