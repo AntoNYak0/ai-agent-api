@@ -6,7 +6,7 @@ from app.services.deepseek import deepseek_completion_stream
 from app.services import credits, analytics
 from app.x402_setup import settle_actual_usage, validate_min_price
 from app.routes import get_network, get_tx
-from app.pricing import round_up_cents, get_max_tokens, PER_1K_TOKENS_MICROUNITS
+from app.pricing import round_up_cents, get_max_tokens, calc_upto_cost
 from app.prompts.audit import AUDIT_SYSTEM_PROMPT
 from app.prompts.refactor import REFACTOR_SYSTEM_PROMPT
 from app.prompts.docs import DOCS_SYSTEM_PROMPT
@@ -27,6 +27,10 @@ _PROMPTS = {
 _BASE_MICROUNITS = {
     "audit": 20_000, "refactor": 30_000, "docs": 10_000,
     "trading": 10_000, "solidity-scan": 40_000,
+}
+_MAX_MICROUNITS = {
+    "audit": 50_000, "refactor": 50_000, "docs": 30_000,
+    "trading": 30_000, "solidity-scan": 80_000,
 }
 _MIN_MICROUNITS = {
     "audit": 10_000, "refactor": 10_000, "docs": 5_000,
@@ -57,40 +61,53 @@ async def stream_tool(
 
     is_api_key = hasattr(request.state, "human_api_key")
 
-    # Credit pre-check for API key users BEFORE streaming
+    # Credit pre-deduct for API key users BEFORE streaming (closes TOCTOU gap)
+    max_mu = _MAX_MICROUNITS.get(tool, 50_000)
     if is_api_key:
-        estimated_microunits = _BASE_MICROUNITS.get(tool, 20_000) + 30_000  # base + ~10K tokens
-        estimated_cents = round_up_cents((estimated_microunits / 10_000) * _CREDIT_MULTIPLIER)
-        balance = credits.get_balance(request.state.human_api_key)
-        if not balance or (balance["credits"] / 10) < estimated_cents:
+        if not credits.pre_deduct_max(request.state.human_api_key, max_mu):
             analytics.track(tool, "api_key", False, 0, 0)
             return JSONResponse(status_code=402, content={"error": "insufficient_credits",
-                "message": f"Need ~{estimated_cents} credits, have {balance['credits'] if balance else 0}"})
+                "message": f"Need at least ${max_mu/1_000_000:.2f} in credits"})
 
     async def generate():
         tokens = 0
+        compressed = False
         try:
-            async for chunk in deepseek_completion_stream(
+            stream = deepseek_completion_stream(
                 _PROMPTS[tool], input, context or None, json_mode=True, max_tokens=get_max_tokens(tool)
-            ):
+            )
+            # First value is the compression flag
+            first = await stream.__anext__()
+            if isinstance(first, bool):
+                compressed = first
+                if compressed:
+                    yield "event: meta\ndata: {\"context_compressed\": true}\n\n"
+            else:
+                # No compression flag (legacy) — treat as content
+                tokens += len(first) // 4 if isinstance(first, str) else 0
+                yield f"data: {first}\n\n"
+
+            async for chunk in stream:
                 tokens += len(chunk) // 4  # rough token estimate from chars
                 yield f"data: {chunk}\n\n"
+            yield "data: [DONE]\n\n"
+        except StopAsyncIteration:
             yield "data: [DONE]\n\n"
         except Exception as e:
             yield f'data: {{"error": "{str(e)}"}}\n\n'
 
         # Settle after stream completes
+        base = _BASE_MICROUNITS.get(tool, 20_000)
+        microunits, _, _ = calc_upto_cost(base, tokens, max_mu)
         if not is_api_key:
-            microunits = _BASE_MICROUNITS.get(tool, 20_000) + int((tokens / 1000) * PER_1K_TOKENS_MICROUNITS)
-            await settle_actual_usage(request, microunits)
+            try:
+                await settle_actual_usage(request, microunits)
+            except Exception:
+                logger.warning("x402 settlement failed after stream: tool=%s tokens=%s", tool, tokens)
             analytics.track(tool, "x402", True, tokens, microunits / 1e6)
         else:
-            microunits = _BASE_MICROUNITS.get(tool, 20_000) + int((tokens / 1000) * PER_1K_TOKENS_MICROUNITS)
+            credits.finalize_deduction(request.state.human_api_key, max_mu, microunits)
             cost_cents = round_up_cents((microunits / 10_000) * _CREDIT_MULTIPLIER)
-            ok = credits.spend_credits(request.state.human_api_key, cost_cents)
-            if not ok:
-                logger.warning("spend_credits failed after stream: tool=%s key=%s... cents=%s",
-                               tool, request.state.human_api_key[:10], cost_cents)
-            analytics.track(tool, "api_key", ok, tokens, cost_cents / 100 if ok else 0)
+            analytics.track(tool, "api_key", True, tokens, cost_cents / 100)
 
     return StreamingResponse(generate(), media_type="text/event-stream")

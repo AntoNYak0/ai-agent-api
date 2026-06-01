@@ -1,6 +1,7 @@
 """Deploy updated files to VPS via SFTP and restart agent-api."""
 import os
 import sys
+from pathlib import Path
 import paramiko
 
 HOST = "77.239.107.30"
@@ -75,7 +76,7 @@ else:
 sftp = ssh.open_sftp()
 
 for f in files:
-    local = local_base + "\\" + f.replace("/", "\\")
+    local = str(Path(local_base) / f)  # cross-platform path join
     remote = f"{BASE}/{f}"
     # Ensure remote dir exists
     remote_dir = os.path.dirname(remote)

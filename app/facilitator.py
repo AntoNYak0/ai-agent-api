@@ -4,6 +4,7 @@ Testnet: auto-approves payments (for testing).
 Mainnet: verifies USDC transfers via public RPCs with failover.
 """
 import logging
+import re
 import uuid
 
 from x402.schemas import (
@@ -41,6 +42,17 @@ RPC_URLS = {
     "eip155:11155420": [
         "https://sepolia.optimism.io",
     ],
+    "eip155:56": [
+        "https://bsc-dataseed1.binance.org",
+        "https://bsc-dataseed2.binance.org",
+        "https://bsc-dataseed3.binance.org",
+        "https://bsc-dataseed4.binance.org",
+        "https://rpc.ankr.com/bsc",
+    ],
+    "eip155:97": [
+        "https://data-seed-prebsc-1-s1.binance.org:8545",
+        "https://data-seed-prebsc-2-s1.binance.org:8545",
+    ],
 }
 
 # USDC contract addresses by CAIP-2 network
@@ -51,10 +63,26 @@ USDC_CONTRACTS = {
     "eip155:84532": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",  # Base Sepolia testnet
     "eip155:421614": "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4dD",  # Arbitrum Sepolia testnet
     "eip155:11155420": "0x5fd84259d66Cd46123540766Be93DFE6D43130D7",  # Optimism Sepolia testnet
+    "eip155:56": "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d",       # BNB Smart Chain — USDC
+    "eip155:97": "0x64544969ed7EBf5f083679233325356EbE738930",       # BSC Testnet — USDC
 }
 
 # keccak256("Transfer(address,address,uint256)")
 TRANSFER_EVENT_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+
+# Gas price threshold: reject if gas cost exceeds this fraction of payment
+GAS_COST_THRESHOLD = 0.50       # 50% — gas must be < 50% of payment
+ETH_USD_ESTIMATE = 2000.0       # rough ETH/USD rate for gas cost estimation
+
+# ── Tx hash format validation ──────────────────────────────────────
+
+def _is_valid_evm_tx_hash(tx_hash: str) -> bool:
+    """Validate EVM transaction hash: 0x + 64 lowercase/uppercase hex chars."""
+    return bool(re.match(r'^0x[a-fA-F0-9]{64}$', tx_hash))
+
+def _is_valid_tron_tx_hash(tx_hash: str) -> bool:
+    """Validate TRON transaction hash: 64 hex chars, optional 0x prefix."""
+    return bool(re.match(r'^(0x)?[a-fA-F0-9]{64}$', tx_hash))
 
 
 class DirectFacilitator:
@@ -66,9 +94,9 @@ class DirectFacilitator:
 
     def get_supported(self) -> SupportedResponse:
         networks = (
-            ["eip155:84532", "eip155:421614", "eip155:11155420"]
+            ["eip155:84532", "eip155:421614", "eip155:11155420", "eip155:97"]
             if self.testnet
-            else ["eip155:8453", "eip155:42161", "eip155:10"]
+            else ["eip155:8453", "eip155:42161", "eip155:10", "eip155:56"]
         )
         return SupportedResponse(
             kinds=[
@@ -122,13 +150,22 @@ class DirectFacilitator:
                 invalid_message="Payment payload must include transactionHash",
             )
 
+        # Validate tx hash format: must be 0x + 64 hex chars for EVM
+        if not _is_valid_evm_tx_hash(tx_hash):
+            logger.warning("cid=%s reason=invalid_tx_hash_format tx=%s", corr_id, tx_hash[:20])
+            return VerifyResponse(
+                is_valid=False,
+                invalid_reason="invalid_tx_hash_format",
+                invalid_message="Invalid transaction hash format. Expected 0x + 64 hex characters.",
+            )
+
         expected_contract = USDC_CONTRACTS.get(network)
         if not expected_contract:
             logger.warning("cid=%s reason=unsupported_network network=%s", corr_id, network)
             return VerifyResponse(
                 is_valid=False,
                 invalid_reason="unsupported_network",
-                invalid_message=f"Network {network} not supported. Use Base (eip155:8453), Arbitrum (eip155:42161), or Optimism (eip155:10)",
+                invalid_message=f"Network {network} not supported. Use Base (eip155:8453), Arbitrum (eip155:42161), Optimism (eip155:10), or BNB Chain (eip155:56)",
             )
 
         logger.info("cid=%s verifying tx=%s network=%s", corr_id, tx_hash[:16], network)
@@ -181,6 +218,39 @@ class DirectFacilitator:
                 invalid_reason="tx_failed",
                 invalid_message="Transaction reverted or failed",
             )
+
+        # 1.5. Gas cost threshold — reject if gas > 50% of payment
+        required_amount_str = requirements.amount
+        if required_amount_str:
+            try:
+                required_amount = int(required_amount_str)
+                gas_used_hex = receipt.get("gasUsed", "0x0")
+                gas_price_hex = receipt.get("effectiveGasPrice", "0x0")
+                gas_used = int(gas_used_hex, 16) if isinstance(gas_used_hex, str) else gas_used_hex
+                gas_price = int(gas_price_hex, 16) if isinstance(gas_price_hex, str) else gas_price_hex
+                gas_cost_wei = gas_used * gas_price
+                gas_cost_usd = (gas_cost_wei / 1e18) * ETH_USD_ESTIMATE
+                gas_cost_microunits = int(gas_cost_usd * 1e6)
+
+                if required_amount > 0 and gas_cost_microunits > required_amount * GAS_COST_THRESHOLD:
+                    logger.warning(
+                        "cid=%s tx=%s reason=gas_too_high gas=%.4f USD payment=%.4f USD ratio=%.1f%%",
+                        corr_id, tx_hash[:16],
+                        gas_cost_usd,
+                        required_amount / 1e6,
+                        (gas_cost_microunits / required_amount) * 100 if required_amount > 0 else 0,
+                    )
+                    return VerifyResponse(
+                        is_valid=False,
+                        invalid_reason="gas_cost_too_high",
+                        invalid_message=(
+                            f"Gas cost (≈${gas_cost_usd:.2f}) exceeds {GAS_COST_THRESHOLD*100:.0f}% "
+                            f"of payment (${required_amount / 1e6:.4f}). "
+                            f"Try using a network with lower gas fees."
+                        ),
+                    )
+            except (ValueError, TypeError, ZeroDivisionError):
+                pass  # If we can't parse gas info, proceed anyway
 
         # 2. Find the USDC Transfer event in logs (match contract + topic)
         expected_contract_lower = expected_contract.lower()
@@ -331,6 +401,15 @@ class TronFacilitator:
                 is_valid=False,
                 invalid_reason="missing_tx_hash",
                 invalid_message="Payment payload must include transactionHash",
+            )
+
+        # Validate tx hash format: TRON uses 64 hex chars (with optional 0x prefix)
+        if not _is_valid_tron_tx_hash(tx_hash):
+            logger.warning("TRON verification rejected: invalid tx hash format %s...", tx_hash[:20])
+            return VerifyResponse(
+                is_valid=False,
+                invalid_reason="invalid_tx_hash_format",
+                invalid_message="Invalid transaction hash format. Expected 64 hex characters.",
             )
 
         logger.info("Verifying TRC-20 tx %s... on TRON", tx_hash[:16])

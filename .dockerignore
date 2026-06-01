@@ -1,0 +1,42 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.eggs/
+dist/
+build/
+*.so
+
+# Environment
+.env
+.env.*
+!.env.example
+scripts/.env
+!scripts/.env.example
+
+# Tests
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE
+.vscode/
+.idea/
+
+# Data
+data/
+logs/
+*.db
+*.db-journal
+*.db-wal
+
+# OS
+.DS_Store
+Thumbs.db

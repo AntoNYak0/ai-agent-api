@@ -2,14 +2,18 @@
 
 29 tools: 18 upto services + 6 micro-tasks + 4 composite skills + run-workflow.
 AI services use upto (usage-based) pricing; micro-tasks use exact (flat) pricing.
-All priced for machine-to-machine economy ($0.0005–$1.00 USDC).
+All priced for machine-to-machine economy ($0.001–$1.00 USDC).
 """
 import logging
 from mcp.server.fastmcp import FastMCP
 from app.config import settings
 from app.services.deepseek import deepseek_completion
 from app.services.replay_guard import is_replay
-from app.pricing import round_up_cents, PER_1K_TOKENS_MICROUNITS, CREDIT_MULTIPLIER, get_max_tokens
+from app.pricing import (
+    round_up_cents, PER_1K_TOKENS_MICROUNITS, CREDIT_MULTIPLIER, get_max_tokens,
+    AI_UPTO_SERVICES as _AI_UPTO, EXACT_SERVICES as _EXACT, COMPOSITE_SKILLS as _COMPOSITE,
+    _TOOL_NAMES, calc_upto_cost,
+)
 from app.services import credits
 from app.prompts.audit import AUDIT_SYSTEM_PROMPT
 from app.prompts.refactor import REFACTOR_SYSTEM_PROMPT
@@ -56,7 +60,7 @@ Dev tools (upto pricing):
 - git-summarize ($0.005–$0.02 USDC) — git diff to PR description
 
 Micro-tasks (exact pricing):
-- validate-json ($0.0005 USDC) — validate JSON/YAML
+- validate-json ($0.001 USDC) — validate JSON/YAML
 - classify-text ($0.001 USDC) — sentiment + category
 - extract-data ($0.005 USDC) — extract structured data from text
 - generate-regex ($0.002 USDC) — regex from description
@@ -134,12 +138,20 @@ _NETWORK_ASSETS = {
     "eip155:8453": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",    # Base USDC
     "eip155:42161": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",   # Arbitrum USDC
     "eip155:10": "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85",     # Optimism USDC
+    "eip155:56": "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d",     # BNB Chain USDC
 }
 
 def _credits_cost_cents(microunits: int) -> int:
     """Convert microunits to credit cents with 1.5x multiplier, min 1 cent."""
     cents = (microunits / 10000) * CREDIT_MULTIPLIER
     return round_up_cents(cents)
+
+
+def _safe_summarize_prompt(max_length: int = 100) -> str:
+    """Safely inject max_length into SUMMARIZE_PROMPT. Falls back gracefully."""
+    if "__MAX_LENGTH__" in SUMMARIZE_PROMPT:
+        return SUMMARIZE_PROMPT.replace("__MAX_LENGTH__", str(max_length))
+    return SUMMARIZE_PROMPT
 
 
 def _deduct_credits(api_key: str, cost_cents: int, tool_name: str = "unknown") -> bool:
@@ -150,62 +162,47 @@ def _deduct_credits(api_key: str, cost_cents: int, tool_name: str = "unknown") -
                        tool_name, api_key[:10], cost_cents)
     return ok
 
-# ── Pricing tables ──────────────────────────────────────────────
+# ── Pricing tables (built from pricing.py single source of truth) ──
 
-# AI services: (base_price_microunits, max_price_microunits, display_name)
-UPTO_SERVICES = {
-    "audit":       (20000, 50000, "$0.02–$0.05"),
-    "refactor":    (30000, 50000, "$0.03–$0.05"),
-    "docs":        (10000, 30000, "$0.01–$0.03"),
-    "defi":        (20000, 40000, "$0.02–$0.04"),
-    "trading":     (10000, 30000, "$0.01–$0.03"),
-    "solidity-scan": (40000, 80000, "$0.04–$0.08"),
-    "nl-to-sql":   (10000, 30000, "$0.01–$0.03"),
-    "sql-to-nl":   (10000, 20000, "$0.01–$0.02"),
-    "git-summarize": (10000, 20000, "$0.01–$0.02"),
-    "translate-code": (20000, 50000, "$0.02–$0.05"),
-    "whale-tracker": (15000, 30000, "$0.015–$0.03"),
-    "smart-money": (25000, 50000, "$0.025–$0.05"),
-    "price-feed":  (10000, 20000, "$0.01–$0.02"),
-    "agent-audit": (250000, 500000, "$0.25–$0.50"),
-    "contract-verify": (500000, 1000000, "$0.50–$1.00"),
-    "security-score": (50000, 100000, "$0.05–$0.10"),
-    "data-feed":   (10000, 20000, "$0.01–$0.02"),
-    "debug-log":   (10000, 30000, "$0.01–$0.03"),
-}
+def _parse_price_to_microunits(price_str: str) -> int:
+    """Parse "$0.05" → 50000 microunits."""
+    return int(float(price_str.replace("$", "").replace(",", "")) * 1_000_000)
 
-# Micro-tasks: exact pricing (amount in microunits, display price)
-EXACT_SERVICES = {
-    "validate-json":  ("500",  "$0.0005"),
-    "classify-text":  ("1000", "$0.001"),
-    "extract-data":   ("5000", "$0.005"),
-    "generate-regex": ("2000", "$0.002"),
-    "format-data":    ("3000", "$0.003"),
-    "summarize":      ("2000", "$0.002"),
-}
+# Build reverse: pricing_key → MCP tool name
+_pricing_to_mcp = {v: k for k, v in _TOOL_NAMES.items() if v is not None}
 
-# Build PRICES and AMOUNTS for backward compat
-PRICES = {}
-AMOUNTS = {}
+PRICES: dict[str, str] = {}
+AMOUNTS: dict[str, str] = {}
 
-for name, (base, max_, display) in UPTO_SERVICES.items():
-    PRICES[name] = display
-    AMOUNTS[name] = str(max_)  # verify checks against max
+# AI upto services
+for pricing_key, svc in _AI_UPTO.items():
+    mcp_name = _pricing_to_mcp.get(pricing_key)
+    if mcp_name is None:
+        continue
+    base = svc["base_microunits"]
+    max_mu = _parse_price_to_microunits(svc["max_price"])
+    base_usd = base / 1_000_000
+    if base_usd >= 0.01:
+        base_str = f"${base_usd:.2f}"
+    else:
+        base_str = f"${base_usd:.3f}"
+    PRICES[mcp_name] = f"{base_str}–{svc['max_price']}"
+    AMOUNTS[mcp_name] = str(max_mu)
 
-for name, (amount, display) in EXACT_SERVICES.items():
-    PRICES[name] = display
-    AMOUNTS[name] = amount
+# Micro-tasks (exact pricing)
+for pricing_key, svc in _EXACT.items():
+    mcp_name = _pricing_to_mcp.get(pricing_key)
+    if mcp_name is None:
+        continue
+    PRICES[mcp_name] = svc["price"]
+    AMOUNTS[mcp_name] = str(svc["microunits"])
 
-# Composite skills pricing (for _payment_help support)
-COMPOSITE_SERVICE_PRICES = {
-    "defi-research": ("80000", "$0.08"),
-    "code-health-check": ("100000", "$0.10"),
-    "smart-contract-audit": ("100000", "$0.10"),
-    "data-pipeline": ("50000", "$0.05"),
-}
-for name, (amount, display) in COMPOSITE_SERVICE_PRICES.items():
-    PRICES[name] = display
-    AMOUNTS[name] = amount
+# Composite skills
+for pricing_key, svc in _COMPOSITE.items():
+    mcp_name = pricing_key.replace("_", "-")
+    microunits = _parse_price_to_microunits(svc["price"])
+    PRICES[mcp_name] = svc["price"]
+    AMOUNTS[mcp_name] = str(microunits)
 
 
 async def _verify_payment(payment_tx: str, amount: str, tool_name: str = "unknown", api_key: str = "", network: str = "eip155:8453") -> tuple[bool, str]:
@@ -287,17 +284,24 @@ def _payment_help(service: str) -> str:
     tron_part = f" or USDT to {PAY_TO_TRON} on Tron" if PAY_TO_TRON else ""
     return (
         f"To use this tool, send {PRICES[service]} USDC to {PAY_TO} "
-        f"on Base (eip155:8453), Arbitrum (eip155:42161), Optimism (eip155:10){tron_part}, "
+        f"on Base (eip155:8453), Arbitrum (eip155:42161), Optimism (eip155:10), BNB Chain (eip155:56){tron_part}, "
         f"then call again with payment_tx=<transaction-hash>"
     )
 
 
 def _calc_upto_amount(service: str, tokens_used: int) -> int:
-    """Calculate actual cost for upto service = base + token rate, capped at max."""
-    base, max_amount, _ = UPTO_SERVICES[service]
-    token_cost = (tokens_used / 1000) * PER_1K_TOKENS_MICROUNITS
-    actual = int(base + token_cost)
-    return min(actual, max_amount)
+    """Calculate actual cost for upto service using complexity-based pricing.
+    Simple (<500 tokens): 0.5x multiplier, Normal (500-3000): 1.0x, Complex (>3000): 1.5x.
+    Result is capped at the service's max_price.
+    """
+    pricing_key = _TOOL_NAMES.get(service)
+    svc = _AI_UPTO.get(pricing_key) if pricing_key else None
+    if svc is None:
+        return int((tokens_used / 1000) * PER_1K_TOKENS_MICROUNITS)
+    base = svc["base_microunits"]
+    max_amount = _parse_price_to_microunits(svc["max_price"])
+    microunits, _, _ = calc_upto_cost(base, tokens_used, max_amount)
+    return microunits
 
 
 async def _settle_payment(payment_tx: str, actual_amount: int, network: str = "eip155:8453"):
@@ -337,7 +341,7 @@ async def audit_tool(code: str, context: str = "", payment_tx: str = "", api_key
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('audit')}"
     use_credits = info.startswith("credits:")
-    result, tokens = await deepseek_completion(AUDIT_SYSTEM_PROMPT, code, context or None, json_mode=True, max_tokens=get_max_tokens("audit"))
+    result, tokens, _ = await deepseek_completion(AUDIT_SYSTEM_PROMPT, code, context or None, json_mode=True, max_tokens=get_max_tokens("audit"))
     actual = _calc_upto_amount("audit", tokens)
     if use_credits:
         _deduct_credits(api_key, _credits_cost_cents(actual))
@@ -353,7 +357,7 @@ async def refactor_tool(code: str, instructions: str = "", context: str = "", pa
         return f"Payment required: {info}\n\n{_payment_help('refactor')}"
     use_credits = info.startswith("credits:")
     user_content = f"Instructions: {instructions}\n\nCode:\n{code}" if instructions else code
-    result, tokens = await deepseek_completion(REFACTOR_SYSTEM_PROMPT, user_content, context or None, json_mode=True, max_tokens=get_max_tokens("refactor"))
+    result, tokens, _ = await deepseek_completion(REFACTOR_SYSTEM_PROMPT, user_content, context or None, json_mode=True, max_tokens=get_max_tokens("refactor"))
     actual = _calc_upto_amount("refactor", tokens)
     if use_credits:
         _deduct_credits(api_key, _credits_cost_cents(actual))
@@ -368,7 +372,7 @@ async def docs_tool(code: str, context: str = "", payment_tx: str = "", api_key:
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('docs')}"
     use_credits = info.startswith("credits:")
-    result, tokens = await deepseek_completion(DOCS_SYSTEM_PROMPT, code, context or None, json_mode=True, max_tokens=get_max_tokens("docs"))
+    result, tokens, _ = await deepseek_completion(DOCS_SYSTEM_PROMPT, code, context or None, json_mode=True, max_tokens=get_max_tokens("docs"))
     actual = _calc_upto_amount("docs", tokens)
     if use_credits:
         _deduct_credits(api_key, _credits_cost_cents(actual))
@@ -388,7 +392,7 @@ async def defi_tool(protocol: str, chain: str = "Ethereum", details: str = "", o
         user_content += f"\n\nDetails: {details}"
     if onchain_data:
         user_content += f"\n\nProvided onchain data:\n{onchain_data}"
-    result, tokens = await deepseek_completion(DEFI_SYSTEM_PROMPT, user_content, json_mode=True, max_tokens=get_max_tokens("defi"))
+    result, tokens, _ = await deepseek_completion(DEFI_SYSTEM_PROMPT, user_content, json_mode=True, max_tokens=get_max_tokens("defi"))
     actual = _calc_upto_amount("defi", tokens)
     if use_credits:
         _deduct_credits(api_key, _credits_cost_cents(actual))
@@ -406,7 +410,7 @@ async def trading_tool(asset: str, timeframe: str = "daily", additional_info: st
     user_content = f"Asset: {asset}\nTimeframe: {timeframe}"
     if additional_info:
         user_content += f"\n\nAdditional info: {additional_info}"
-    result, tokens = await deepseek_completion(TRADING_SYSTEM_PROMPT, user_content, json_mode=True, max_tokens=get_max_tokens("trading"))
+    result, tokens, _ = await deepseek_completion(TRADING_SYSTEM_PROMPT, user_content, json_mode=True, max_tokens=get_max_tokens("trading"))
     actual = _calc_upto_amount("trading", tokens)
     if use_credits:
         _deduct_credits(api_key, _credits_cost_cents(actual))
@@ -426,7 +430,7 @@ async def whale_tracker_tool(asset: str, wallet_address: str = "", timeframe: st
     content = f"Asset: {asset}\nTimeframe: {timeframe}"
     if wallet_address:
         content += f"\nWallet: {wallet_address}"
-    result, tokens = await deepseek_completion(WHALE_TRACKER_PROMPT, content, json_mode=True, max_tokens=get_max_tokens("whale-tracker"))
+    result, tokens, _ = await deepseek_completion(WHALE_TRACKER_PROMPT, content, json_mode=True, max_tokens=get_max_tokens("whale-tracker"))
     actual = _calc_upto_amount("whale-tracker", tokens)
     if use_credits:
         _deduct_credits(api_key, _credits_cost_cents(actual))
@@ -442,7 +446,7 @@ async def smart_money_tool(wallet_address: str, chain: str = "ethereum", payment
         return f"Payment required: {info}\n\n{_payment_help('smart-money')}"
     use_credits = info.startswith("credits:")
     content = f"Wallet: {wallet_address}\nChain: {chain}"
-    result, tokens = await deepseek_completion(SMART_MONEY_PROMPT, content, json_mode=True, max_tokens=get_max_tokens("smart-money"))
+    result, tokens, _ = await deepseek_completion(SMART_MONEY_PROMPT, content, json_mode=True, max_tokens=get_max_tokens("smart-money"))
     actual = _calc_upto_amount("smart-money", tokens)
     if use_credits:
         _deduct_credits(api_key, _credits_cost_cents(actual))
@@ -457,7 +461,7 @@ async def price_feed_tool(token: str, payment_tx: str = "", api_key: str = "", n
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('price-feed')}"
     use_credits = info.startswith("credits:")
-    result, tokens = await deepseek_completion(PRICE_FEED_PROMPT, token, json_mode=True, max_tokens=get_max_tokens("price-feed"))
+    result, tokens, _ = await deepseek_completion(PRICE_FEED_PROMPT, token, json_mode=True, max_tokens=get_max_tokens("price-feed"))
     actual = _calc_upto_amount("price-feed", tokens)
     if use_credits:
         _deduct_credits(api_key, _credits_cost_cents(actual))
@@ -474,7 +478,7 @@ async def solidity_scan_tool(code: str, context: str = "", payment_tx: str = "",
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('solidity-scan')}"
     use_credits = info.startswith("credits:")
-    result, tokens = await deepseek_completion(SOLIDITY_SCAN_PROMPT, code, context or None, json_mode=True, max_tokens=get_max_tokens("solidity-scan"))
+    result, tokens, _ = await deepseek_completion(SOLIDITY_SCAN_PROMPT, code, context or None, json_mode=True, max_tokens=get_max_tokens("solidity-scan"))
     actual = _calc_upto_amount("solidity-scan", tokens)
     if use_credits:
         _deduct_credits(api_key, _credits_cost_cents(actual))
@@ -492,7 +496,7 @@ async def agent_audit_tool(agent_code: str, behavior_description: str = "", agen
         return f"Payment required: {info}\n\n{_payment_help('agent-audit')}"
     use_credits = info.startswith("credits:")
     content = f"Agent: {agent_name or 'unnamed'}\nBehavior: {behavior_description or 'not specified'}\n\nCode:\n{agent_code}"
-    result, tokens = await deepseek_completion(AGENT_AUDIT_PROMPT, content, json_mode=True, max_tokens=get_max_tokens("agent-audit"))
+    result, tokens, _ = await deepseek_completion(AGENT_AUDIT_PROMPT, content, json_mode=True, max_tokens=get_max_tokens("agent-audit"))
     actual = _calc_upto_amount("agent-audit", tokens)
     if use_credits:
         _deduct_credits(api_key, _credits_cost_cents(actual))
@@ -508,7 +512,7 @@ async def contract_verify_tool(contract_code: str, contract_name: str = "", chai
         return f"Payment required: {info}\n\n{_payment_help('contract-verify')}"
     use_credits = info.startswith("credits:")
     content = f"Contract: {contract_name or 'unnamed'}\nChain: {chain}\n\nCode:\n{contract_code}"
-    result, tokens = await deepseek_completion(CONTRACT_VERIFY_PROMPT, content, json_mode=True, max_tokens=get_max_tokens("contract-verify"))
+    result, tokens, _ = await deepseek_completion(CONTRACT_VERIFY_PROMPT, content, json_mode=True, max_tokens=get_max_tokens("contract-verify"))
     actual = _calc_upto_amount("contract-verify", tokens)
     if use_credits:
         _deduct_credits(api_key, _credits_cost_cents(actual))
@@ -524,7 +528,7 @@ async def security_score_tool(code: str, description: str = "", payment_tx: str 
         return f"Payment required: {info}\n\n{_payment_help('security-score')}"
     use_credits = info.startswith("credits:")
     content = f"Description: {description or 'code analysis'}\n\nCode:\n{code}"
-    result, tokens = await deepseek_completion(SECURITY_SCORE_PROMPT, content, json_mode=True, max_tokens=get_max_tokens("security-score"))
+    result, tokens, _ = await deepseek_completion(SECURITY_SCORE_PROMPT, content, json_mode=True, max_tokens=get_max_tokens("security-score"))
     actual = _calc_upto_amount("security-score", tokens)
     if use_credits:
         _deduct_credits(api_key, _credits_cost_cents(actual))
@@ -541,7 +545,7 @@ async def nl_to_sql_tool(query: str, payment_tx: str = "", api_key: str = "", ne
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('nl-to-sql')}"
     use_credits = info.startswith("credits:")
-    result, tokens = await deepseek_completion(NL_TO_SQL_PROMPT, query, json_mode=True, max_tokens=get_max_tokens("nl-to-sql"))
+    result, tokens, _ = await deepseek_completion(NL_TO_SQL_PROMPT, query, json_mode=True, max_tokens=get_max_tokens("nl-to-sql"))
     actual = _calc_upto_amount("nl-to-sql", tokens)
     if use_credits:
         _deduct_credits(api_key, _credits_cost_cents(actual))
@@ -556,7 +560,7 @@ async def sql_to_nl_tool(sql: str, payment_tx: str = "", api_key: str = "", netw
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('sql-to-nl')}"
     use_credits = info.startswith("credits:")
-    result, tokens = await deepseek_completion(SQL_TO_NL_PROMPT, sql, json_mode=True, max_tokens=get_max_tokens("sql-to-nl"))
+    result, tokens, _ = await deepseek_completion(SQL_TO_NL_PROMPT, sql, json_mode=True, max_tokens=get_max_tokens("sql-to-nl"))
     actual = _calc_upto_amount("sql-to-nl", tokens)
     if use_credits:
         _deduct_credits(api_key, _credits_cost_cents(actual))
@@ -573,7 +577,7 @@ async def git_summarize_tool(diff: str, payment_tx: str = "", api_key: str = "",
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('git-summarize')}"
     use_credits = info.startswith("credits:")
-    result, tokens = await deepseek_completion(GIT_SUMMARIZE_PROMPT, diff, json_mode=True, max_tokens=get_max_tokens("git-summarize"))
+    result, tokens, _ = await deepseek_completion(GIT_SUMMARIZE_PROMPT, diff, json_mode=True, max_tokens=get_max_tokens("git-summarize"))
     actual = _calc_upto_amount("git-summarize", tokens)
     if use_credits:
         _deduct_credits(api_key, _credits_cost_cents(actual))
@@ -589,7 +593,7 @@ async def translate_code_tool(code: str, source_lang: str, target_lang: str, pay
         return f"Payment required: {info}\n\n{_payment_help('translate-code')}"
     use_credits = info.startswith("credits:")
     prompt = TRANSLATE_CODE_PROMPT.replace("__SOURCE_LANG__", source_lang).replace("__TARGET_LANG__", target_lang)
-    result, tokens = await deepseek_completion(prompt, code, json_mode=True, max_tokens=get_max_tokens("translate-code"))
+    result, tokens, _ = await deepseek_completion(prompt, code, json_mode=True, max_tokens=get_max_tokens("translate-code"))
     actual = _calc_upto_amount("translate-code", tokens)
     if use_credits:
         _deduct_credits(api_key, _credits_cost_cents(actual))
@@ -607,7 +611,7 @@ async def data_feed_tool(topic: str, format: str = "json", payment_tx: str = "",
         return f"Payment required: {info}\n\n{_payment_help('data-feed')}"
     use_credits = info.startswith("credits:")
     content = f"Topic: {topic}\nFormat: {format}"
-    result, tokens = await deepseek_completion(DATA_FEED_PROMPT, content, json_mode=True, max_tokens=get_max_tokens("data-feed"))
+    result, tokens, _ = await deepseek_completion(DATA_FEED_PROMPT, content, json_mode=True, max_tokens=get_max_tokens("data-feed"))
     actual = _calc_upto_amount("data-feed", tokens)
     if use_credits:
         _deduct_credits(api_key, _credits_cost_cents(actual))
@@ -623,7 +627,7 @@ async def debug_log_tool(log: str, context: str = "", payment_tx: str = "", api_
         return f"Payment required: {info}\n\n{_payment_help('debug-log')}"
     use_credits = info.startswith("credits:")
     content = f"Context: {context or 'application error'}\n\nError log:\n{log}"
-    result, tokens = await deepseek_completion(DEBUG_LOG_PROMPT, content, json_mode=True, max_tokens=get_max_tokens("debug-log"))
+    result, tokens, _ = await deepseek_completion(DEBUG_LOG_PROMPT, content, json_mode=True, max_tokens=get_max_tokens("debug-log"))
     actual = _calc_upto_amount("debug-log", tokens)
     if use_credits:
         _deduct_credits(api_key, _credits_cost_cents(actual))
@@ -641,7 +645,7 @@ async def validate_json_tool(data: str, schema: str = "", payment_tx: str = "", 
         return f"Payment required: {info}\n\n{_payment_help('validate-json')}"
     use_credits = info.startswith("credits:")
     content = f"Target schema:\n{schema}\n\nData:\n{data}" if schema else data
-    result, _ = await deepseek_completion(VALIDATE_JSON_PROMPT, content, json_mode=True, max_tokens=get_max_tokens("validate-json"))
+    result, _, _ = await deepseek_completion(VALIDATE_JSON_PROMPT, content, json_mode=True, max_tokens=get_max_tokens("validate-json"))
     if use_credits:
         _deduct_credits(api_key, _credits_cost_cents(int(AMOUNTS["validate-json"])))
     else:
@@ -656,7 +660,7 @@ async def classify_text_tool(text: str, categories: str = "", payment_tx: str = 
         return f"Payment required: {info}\n\n{_payment_help('classify-text')}"
     use_credits = info.startswith("credits:")
     content = f"Categories hint: {categories or 'auto-detect'}\n\nText:\n{text}"
-    result, _ = await deepseek_completion(CLASSIFY_TEXT_PROMPT, content, json_mode=True, max_tokens=get_max_tokens("classify-text"))
+    result, _, _ = await deepseek_completion(CLASSIFY_TEXT_PROMPT, content, json_mode=True, max_tokens=get_max_tokens("classify-text"))
     if use_credits:
         _deduct_credits(api_key, _credits_cost_cents(int(AMOUNTS["classify-text"])))
     else:
@@ -670,7 +674,7 @@ async def extract_data_tool(text: str, payment_tx: str = "", api_key: str = "", 
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('extract-data')}"
     use_credits = info.startswith("credits:")
-    result, _ = await deepseek_completion(EXTRACT_DATA_PROMPT, text, json_mode=True, max_tokens=get_max_tokens("extract-data"))
+    result, _, _ = await deepseek_completion(EXTRACT_DATA_PROMPT, text, json_mode=True, max_tokens=get_max_tokens("extract-data"))
     if use_credits:
         _deduct_credits(api_key, _credits_cost_cents(int(AMOUNTS["extract-data"])))
     else:
@@ -684,7 +688,7 @@ async def generate_regex_tool(description: str, payment_tx: str = "", api_key: s
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('generate-regex')}"
     use_credits = info.startswith("credits:")
-    result, _ = await deepseek_completion(GENERATE_REGEX_PROMPT, description, json_mode=True, max_tokens=get_max_tokens("generate-regex"))
+    result, _, _ = await deepseek_completion(GENERATE_REGEX_PROMPT, description, json_mode=True, max_tokens=get_max_tokens("generate-regex"))
     if use_credits:
         _deduct_credits(api_key, _credits_cost_cents(int(AMOUNTS["generate-regex"])))
     else:
@@ -699,7 +703,7 @@ async def format_data_tool(data: str, source_format: str, target_format: str, pa
         return f"Payment required: {info}\n\n{_payment_help('format-data')}"
     use_credits = info.startswith("credits:")
     prompt = FORMAT_DATA_PROMPT.replace("__SOURCE_FORMAT__", source_format).replace("__TARGET_FORMAT__", target_format)
-    result, _ = await deepseek_completion(prompt, data, json_mode=True, max_tokens=get_max_tokens("format-data"))
+    result, _, _ = await deepseek_completion(prompt, data, json_mode=True, max_tokens=get_max_tokens("format-data"))
     if use_credits:
         _deduct_credits(api_key, _credits_cost_cents(int(AMOUNTS["format-data"])))
     else:
@@ -713,8 +717,8 @@ async def summarize_tool(text: str, max_length: int = 100, payment_tx: str = "",
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('summarize')}"
     use_credits = info.startswith("credits:")
-    prompt = SUMMARIZE_PROMPT.replace("__MAX_LENGTH__", str(max_length))
-    result, _ = await deepseek_completion(prompt, text, json_mode=True)
+    prompt = _safe_summarize_prompt(max_length)
+    result, _, _ = await deepseek_completion(prompt, text, json_mode=True)
     if use_credits:
         _deduct_credits(api_key, _credits_cost_cents(int(AMOUNTS["summarize"])))
     else:
@@ -724,8 +728,11 @@ async def summarize_tool(text: str, max_length: int = 100, payment_tx: str = "",
 
 # ── Composite skills (multi-step workflows) ────────────────────
 
-_skill_prices = {"defi-research": 80000, "code-health-check": 100000,
-                 "smart-contract-audit": 100000, "data-pipeline": 50000}
+# Composite skill prices — derived from pricing.py COMPOSITE_SKILLS
+_skill_prices = {
+    pricing_key.replace("_", "-"): _parse_price_to_microunits(svc["price"])
+    for pricing_key, svc in _COMPOSITE.items()
+}
 
 
 @mcp.tool(name="defi-research", description="Full DeFi research: extract on-chain data → analyze protocol → summarize. Price: $0.08 USDC.")
@@ -735,13 +742,15 @@ async def defi_research_tool(protocol: str, chain: str = "ethereum", onchain_dat
         return f"Payment required: {info}\n\n{_payment_help('defi-research')}"
     use_credits = info.startswith("credits:")
     # Step 1: Extract structured data
-    extracted, _ = await deepseek_completion(EXTRACT_DATA_PROMPT, onchain_data or f"Protocol: {protocol}\nChain: {chain}", json_mode=True)
+    extracted, _, _ = await deepseek_completion(EXTRACT_DATA_PROMPT, onchain_data or f"Protocol: {protocol}\nChain: {chain}", json_mode=True)
     # Step 2: DeFi analysis
-    analyzed, _ = await deepseek_completion(DEFI_SYSTEM_PROMPT, f"Protocol: {protocol}\nBlockchain: {chain}\n\nData:\n{extracted}", json_mode=True)
+    analyzed, _, _ = await deepseek_completion(DEFI_SYSTEM_PROMPT, f"Protocol: {protocol}\nBlockchain: {chain}\n\nData:\n{extracted}", json_mode=True)
     # Step 3: Summarize
-    result, _ = await deepseek_completion(SUMMARIZE_PROMPT.replace("__MAX_LENGTH__", "200"), analyzed, json_mode=True)
+    result, _, _ = await deepseek_completion(_safe_summarize_prompt(200), analyzed, json_mode=True)
     if use_credits:
         _deduct_credits(api_key, _credits_cost_cents(_skill_prices["defi-research"]))
+    else:
+        await _settle_payment(payment_tx, _skill_prices["defi-research"], network)
     return result
 
 
@@ -751,11 +760,13 @@ async def code_health_check_tool(code: str, instructions: str = "", payment_tx: 
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('code-health-check')}"
     use_credits = info.startswith("credits:")
-    audited, _ = await deepseek_completion(AUDIT_SYSTEM_PROMPT, code, json_mode=True)
-    refactored, _ = await deepseek_completion(REFACTOR_SYSTEM_PROMPT, f"Code:\n{code}\n\nAudit findings:\n{audited}", json_mode=True)
-    result, _ = await deepseek_completion(DOCS_SYSTEM_PROMPT, refactored, json_mode=True)
+    audited, _, _ = await deepseek_completion(AUDIT_SYSTEM_PROMPT, code, json_mode=True)
+    refactored, _, _ = await deepseek_completion(REFACTOR_SYSTEM_PROMPT, f"Code:\n{code}\n\nAudit findings:\n{audited}", json_mode=True)
+    result, _, _ = await deepseek_completion(DOCS_SYSTEM_PROMPT, refactored, json_mode=True)
     if use_credits:
         _deduct_credits(api_key, _credits_cost_cents(_skill_prices["code-health-check"]))
+    else:
+        await _settle_payment(payment_tx, _skill_prices["code-health-check"], network)
     return result
 
 
@@ -765,10 +776,12 @@ async def smart_contract_audit_tool(code: str, payment_tx: str = "", api_key: st
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('smart-contract-audit')}"
     use_credits = info.startswith("credits:")
-    scanned, _ = await deepseek_completion(SOLIDITY_SCAN_PROMPT, code, json_mode=True)
-    result, _ = await deepseek_completion(DOCS_SYSTEM_PROMPT, f"Solidity audit results:\n{scanned}", json_mode=True)
+    scanned, _, _ = await deepseek_completion(SOLIDITY_SCAN_PROMPT, code, json_mode=True)
+    result, _, _ = await deepseek_completion(DOCS_SYSTEM_PROMPT, f"Solidity audit results:\n{scanned}", json_mode=True)
     if use_credits:
         _deduct_credits(api_key, _credits_cost_cents(_skill_prices["smart-contract-audit"]))
+    else:
+        await _settle_payment(payment_tx, _skill_prices["smart-contract-audit"], network)
     return result
 
 
@@ -778,11 +791,13 @@ async def data_pipeline_tool(text: str, target_format: str = "json", payment_tx:
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('data-pipeline')}"
     use_credits = info.startswith("credits:")
-    extracted, _ = await deepseek_completion(EXTRACT_DATA_PROMPT, text, json_mode=True)
-    formatted, _ = await deepseek_completion(FORMAT_DATA_PROMPT.replace("__SOURCE_FORMAT__", "json").replace("__TARGET_FORMAT__", target_format), extracted, json_mode=True)
-    result, _ = await deepseek_completion(SUMMARIZE_PROMPT.replace("__MAX_LENGTH__", "150"), formatted, json_mode=True)
+    extracted, _, _ = await deepseek_completion(EXTRACT_DATA_PROMPT, text, json_mode=True)
+    formatted, _, _ = await deepseek_completion(FORMAT_DATA_PROMPT.replace("__SOURCE_FORMAT__", "json").replace("__TARGET_FORMAT__", target_format), extracted, json_mode=True)
+    result, _, _ = await deepseek_completion(_safe_summarize_prompt(150), formatted, json_mode=True)
     if use_credits:
         _deduct_credits(api_key, _credits_cost_cents(_skill_prices["data-pipeline"]))
+    else:
+        await _settle_payment(payment_tx, _skill_prices["data-pipeline"], network)
     return result
 
 
@@ -822,13 +837,14 @@ def _resolve_prompt(tool_name: str) -> str | None:
     if entry is None:
         return None
     prompt, _ = entry
-    # Format-string prompts: provide defaults for chain execution
+    # Inject placeholders via replace() — prompts contain JSON braces
+    # that would cause KeyError with .format()
     if tool_name == "translate_code":
-        return prompt.format(source_lang="auto", target_lang="python")
+        return prompt.replace("__SOURCE_LANG__", "auto").replace("__TARGET_LANG__", "python")
     if tool_name == "format_data":
-        return prompt.format(source_format="json", target_format="json")
+        return prompt.replace("__SOURCE_FORMAT__", "json").replace("__TARGET_FORMAT__", "json")
     if tool_name == "summarize":
-        return prompt.format(max_length=150)
+        return prompt.replace("__MAX_LENGTH__", "150")
     return prompt
 
 
@@ -874,7 +890,7 @@ async def run_workflow_tool(workflow_id: str, input_text: str, payment_tx: str =
             break
 
         try:
-            result_text, tokens = await deepseek_completion(prompt, current_input, json_mode=True)
+            result_text, tokens, _ = await deepseek_completion(prompt, current_input, json_mode=True)
             total_tokens += tokens
             current_input = result_text
         except Exception as e:

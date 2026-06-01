@@ -15,8 +15,8 @@ from app.prompts.micro import (
     SUMMARIZE_PROMPT, NL_TO_SQL_PROMPT, SQL_TO_NL_PROMPT, GIT_SUMMARIZE_PROMPT,
     DEBUG_LOG_PROMPT,
 )
-from app.routes import get_network, get_tx
-from app.pricing import round_up_cents, get_max_tokens, CREDIT_MULTIPLIER, PER_1K_TOKENS_MICROUNITS
+from app.routes import get_network, get_tx, build_upto_response
+from app.pricing import round_up_cents, get_max_tokens, CREDIT_MULTIPLIER, calc_upto_cost, get_upto_caps
 from app.x402_setup import settle_actual_usage, validate_min_price
 from fastapi.responses import JSONResponse
 
@@ -37,39 +37,66 @@ def _get_credit_price(service: str) -> int:
     return 10_000
 
 
-async def _pre_check_credits(request: Request, service: str) -> bool:
-    """Check API key credits BEFORE calling AI. Returns False if insufficient.
-    Must be called BEFORE deepseek_completion to avoid wasting tokens on underfunded requests.
+def _get_max_microunits(service: str) -> int:
+    """Get max microunits for a service: upto cap or exact fixed price."""
+    caps = get_upto_caps(service)
+    if caps:
+        return caps[1]  # max_mu
+    return _get_credit_price(service)  # exact fixed price
+
+
+async def _pre_deduct_service(request: Request, service: str) -> int | None:
+    """Atomically pre-deduct at MAX cost BEFORE AI call. Returns reserved_microunits.
+
+    Returns None if insufficient credits. Returns 0 for x402 (no pre-deduct needed).
+    Closes TOCTOU race by combining balance check + deduction under single lock.
     """
     if not hasattr(request.state, "human_api_key"):
-        return True  # x402 users validated by middleware
-    microunits = _get_credit_price(service)
-    cost_cents = round_up_cents((microunits / 10000) * CREDIT_MULTIPLIER)
-    balance = credits.get_balance(request.state.human_api_key)
-    if not balance or (balance["credits"] / 10) < cost_cents:
+        return 0  # x402 users validated by middleware
+    max_mu = _get_max_microunits(service)
+    if not credits.pre_deduct_max(request.state.human_api_key, max_mu):
         analytics.track(service, "api_key", False, 0, 0)
-        return False
-    return True
+        return None
+    return max_mu
 
 
-async def _settle_payment(request: Request, service: str, tokens_used: int = 0):
-    """Settle payment AFTER successful AI call. Credits already pre-checked."""
+async def _settle_payment(request: Request, service: str, reserved_mu: int, tokens_used: int = 0):
+    """Settle payment AFTER successful AI call. reserved_mu was pre-deducted (0 for x402).
+
+    For API key users: finalize_deduction refunds difference between max and actual.
+    For x402 users: settle_actual_usage for the actual microunits consumed.
+    Returns (microunits, multiplier, tier) for upto services, None for exact services.
+    """
     is_api_key = hasattr(request.state, "human_api_key")
-    microunits = _get_credit_price(service)
+    multiplier = 1.0
+    tier = "exact"
+
     if tokens_used:
-        microunits += int((tokens_used / 1000) * PER_1K_TOKENS_MICROUNITS)
+        caps = get_upto_caps(service)
+        if caps:
+            base_mu, max_mu = caps
+            actual_mu, multiplier, tier = calc_upto_cost(base_mu, tokens_used, max_mu)
+        else:
+            microunits = _get_credit_price(service)
+            actual_mu = microunits + int((tokens_used / 1000) * 3000)  # fallback: $0.003/1K tokens
+    else:
+        actual_mu = _get_credit_price(service)
 
     if is_api_key:
-        cost_cents = round_up_cents((microunits / 10000) * CREDIT_MULTIPLIER)
-        credits.spend_credits(request.state.human_api_key, cost_cents)
+        credits.finalize_deduction(request.state.human_api_key, reserved_mu, actual_mu)
+        cost_cents = round_up_cents((actual_mu / 10000) * CREDIT_MULTIPLIER)
         amount_usd = cost_cents / 100
         method = "api_key"
     else:
-        await settle_actual_usage(request, microunits)
-        amount_usd = microunits / 1e6
+        await settle_actual_usage(request, actual_mu)
+        amount_usd = actual_mu / 1e6
         method = "x402"
 
     analytics.track(service, method, True, tokens_used, amount_usd)
+
+    if tokens_used:
+        return actual_mu, multiplier, tier
+    return None
 
 
 
@@ -78,30 +105,33 @@ async def _settle_payment(request: Request, service: str, tokens_used: int = 0):
 
 @router.post("/api/validate-json")
 async def validate_json(request: Request, body: ValidateJsonRequest):
-    if not await _pre_check_credits(request, "validate-json"):
+    reserved = await _pre_deduct_service(request, "validate-json")
+    if reserved is None:
         return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
     content = f"Target schema:\n{body.target_schema}\n\nData:\n{body.data}" if body.target_schema else body.data
-    result, _ = await deepseek_completion(VALIDATE_JSON_PROMPT, content, json_mode=True, max_tokens=get_max_tokens("validate-json"))
-    await _settle_payment(request, "validate-json")
+    result, _, _ = await deepseek_completion(VALIDATE_JSON_PROMPT, content, json_mode=True, max_tokens=get_max_tokens("validate-json"))
+    await _settle_payment(request, "validate-json", reserved)
     return ServiceResponse(result=result, payment_network=get_network(request), payment_tx=get_tx(request))
 
 
 @router.post("/api/classify-text")
 async def classify_text(request: Request, body: ClassifyTextRequest):
-    if not await _pre_check_credits(request, "classify-text"):
+    reserved = await _pre_deduct_service(request, "classify-text")
+    if reserved is None:
         return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
     content = f"Categories hint: {body.categories or 'auto-detect'}\n\nText:\n{body.text}"
-    result, _ = await deepseek_completion(CLASSIFY_TEXT_PROMPT, content, json_mode=True, max_tokens=get_max_tokens("classify-text"))
-    await _settle_payment(request, "classify-text")
+    result, _, _ = await deepseek_completion(CLASSIFY_TEXT_PROMPT, content, json_mode=True, max_tokens=get_max_tokens("classify-text"))
+    await _settle_payment(request, "classify-text", reserved)
     return ServiceResponse(result=result, payment_network=get_network(request), payment_tx=get_tx(request))
 
 
 @router.post("/api/extract-data")
 async def extract_data(request: Request, body: ExtractDataRequest):
-    if not await _pre_check_credits(request, "extract-data"):
+    reserved = await _pre_deduct_service(request, "extract-data")
+    if reserved is None:
         return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
-    result, _ = await deepseek_completion(EXTRACT_DATA_PROMPT, body.text, json_mode=True, max_tokens=get_max_tokens("extract-data"))
-    await _settle_payment(request, "extract-data")
+    result, _, _ = await deepseek_completion(EXTRACT_DATA_PROMPT, body.text, json_mode=True, max_tokens=get_max_tokens("extract-data"))
+    await _settle_payment(request, "extract-data", reserved)
     return ServiceResponse(result=result, payment_network=get_network(request), payment_tx=get_tx(request))
 
 
@@ -111,40 +141,51 @@ async def translate_code(request: Request, body: TranslateCodeRequest):
     if not ok:
         return JSONResponse(status_code=402, content=err,
             headers={"PAYMENT-REQUIRED": "true"})
-    if not await _pre_check_credits(request, "translate-code"):
+    reserved = await _pre_deduct_service(request, "translate-code")
+    if reserved is None:
         return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
     prompt = TRANSLATE_CODE_PROMPT.replace("__SOURCE_LANG__", body.source_lang).replace("__TARGET_LANG__", body.target_lang)
-    result, tokens = await cached_completion("translate-code", body.code, prompt, None, json_mode=True, max_tokens=get_max_tokens("translate-code"))
-    await _settle_payment(request, "translate-code", tokens)
+    result, tokens, _ = await cached_completion("translate-code", body.code, prompt, None, json_mode=True, max_tokens=get_max_tokens("translate-code"))
+    settle_result = await _settle_payment(request, "translate-code", reserved, tokens)
+    if settle_result:
+        microunits, multiplier, tier = settle_result
+        return build_upto_response(result, request, microunits, multiplier, tier, tokens)
     return ServiceResponse(result=result, payment_network=get_network(request), payment_tx=get_tx(request))
 
 
 @router.post("/api/generate-regex")
 async def generate_regex(request: Request, body: GenerateRegexRequest):
-    if not await _pre_check_credits(request, "generate-regex"):
+    reserved = await _pre_deduct_service(request, "generate-regex")
+    if reserved is None:
         return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
-    result, _ = await deepseek_completion(GENERATE_REGEX_PROMPT, body.description, json_mode=True, max_tokens=get_max_tokens("generate-regex"))
-    await _settle_payment(request, "generate-regex")
+    result, _, _ = await deepseek_completion(GENERATE_REGEX_PROMPT, body.description, json_mode=True, max_tokens=get_max_tokens("generate-regex"))
+    await _settle_payment(request, "generate-regex", reserved)
     return ServiceResponse(result=result, payment_network=get_network(request), payment_tx=get_tx(request))
 
 
 @router.post("/api/format-data")
 async def format_data(request: Request, body: FormatDataRequest):
-    if not await _pre_check_credits(request, "format-data"):
+    reserved = await _pre_deduct_service(request, "format-data")
+    if reserved is None:
         return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
     prompt = FORMAT_DATA_PROMPT.replace("__SOURCE_FORMAT__", body.source_format).replace("__TARGET_FORMAT__", body.target_format)
-    result, _ = await deepseek_completion(prompt, body.data, json_mode=True, max_tokens=get_max_tokens("format-data"))
-    await _settle_payment(request, "format-data")
+    result, _, _ = await deepseek_completion(prompt, body.data, json_mode=True, max_tokens=get_max_tokens("format-data"))
+    await _settle_payment(request, "format-data", reserved)
     return ServiceResponse(result=result, payment_network=get_network(request), payment_tx=get_tx(request))
 
 
 @router.post("/api/summarize")
 async def summarize(request: Request, body: SummarizeRequest):
-    if not await _pre_check_credits(request, "summarize"):
+    reserved = await _pre_deduct_service(request, "summarize")
+    if reserved is None:
         return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
-    prompt = SUMMARIZE_PROMPT.replace("__MAX_LENGTH__", str(body.max_length))
-    result, _ = await deepseek_completion(prompt, body.text, json_mode=True, max_tokens=get_max_tokens("summarize"))
-    await _settle_payment(request, "summarize")
+    max_len = body.max_length if body.max_length is not None else 100
+    if "__MAX_LENGTH__" in SUMMARIZE_PROMPT:
+        prompt = SUMMARIZE_PROMPT.replace("__MAX_LENGTH__", str(max_len))
+    else:
+        prompt = SUMMARIZE_PROMPT
+    result, _, _ = await deepseek_completion(prompt, body.text, json_mode=True, max_tokens=get_max_tokens("summarize"))
+    await _settle_payment(request, "summarize", reserved)
     return ServiceResponse(result=result, payment_network=get_network(request), payment_tx=get_tx(request))
 
 
@@ -156,10 +197,14 @@ async def nl_to_sql(request: Request, body: NlToSqlRequest):
     if not ok:
         return JSONResponse(status_code=402, content=err,
             headers={"PAYMENT-REQUIRED": "true"})
-    if not await _pre_check_credits(request, "nl-to-sql"):
+    reserved = await _pre_deduct_service(request, "nl-to-sql")
+    if reserved is None:
         return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
-    result, tokens = await cached_completion("nl-to-sql", body.query, NL_TO_SQL_PROMPT, None, json_mode=True, max_tokens=get_max_tokens("nl-to-sql"))
-    await _settle_payment(request, "nl-to-sql", tokens)
+    result, tokens, _ = await cached_completion("nl-to-sql", body.query, NL_TO_SQL_PROMPT, None, json_mode=True, max_tokens=get_max_tokens("nl-to-sql"))
+    settle_result = await _settle_payment(request, "nl-to-sql", reserved, tokens)
+    if settle_result:
+        microunits, multiplier, tier = settle_result
+        return build_upto_response(result, request, microunits, multiplier, tier, tokens)
     return ServiceResponse(result=result, payment_network=get_network(request), payment_tx=get_tx(request))
 
 
@@ -169,10 +214,14 @@ async def sql_to_nl(request: Request, body: SqlToNlRequest):
     if not ok:
         return JSONResponse(status_code=402, content=err,
             headers={"PAYMENT-REQUIRED": "true"})
-    if not await _pre_check_credits(request, "sql-to-nl"):
+    reserved = await _pre_deduct_service(request, "sql-to-nl")
+    if reserved is None:
         return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
-    result, tokens = await cached_completion("sql-to-nl", body.sql, SQL_TO_NL_PROMPT, None, json_mode=True, max_tokens=get_max_tokens("sql-to-nl"))
-    await _settle_payment(request, "sql-to-nl", tokens)
+    result, tokens, _ = await cached_completion("sql-to-nl", body.sql, SQL_TO_NL_PROMPT, None, json_mode=True, max_tokens=get_max_tokens("sql-to-nl"))
+    settle_result = await _settle_payment(request, "sql-to-nl", reserved, tokens)
+    if settle_result:
+        microunits, multiplier, tier = settle_result
+        return build_upto_response(result, request, microunits, multiplier, tier, tokens)
     return ServiceResponse(result=result, payment_network=get_network(request), payment_tx=get_tx(request))
 
 
@@ -182,10 +231,14 @@ async def git_summarize(request: Request, body: GitSummarizeRequest):
     if not ok:
         return JSONResponse(status_code=402, content=err,
             headers={"PAYMENT-REQUIRED": "true"})
-    if not await _pre_check_credits(request, "git-summarize"):
+    reserved = await _pre_deduct_service(request, "git-summarize")
+    if reserved is None:
         return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
-    result, tokens = await cached_completion("git-summarize", body.diff, GIT_SUMMARIZE_PROMPT, None, json_mode=True, max_tokens=get_max_tokens("git-summarize"))
-    await _settle_payment(request, "git-summarize", tokens)
+    result, tokens, _ = await cached_completion("git-summarize", body.diff, GIT_SUMMARIZE_PROMPT, None, json_mode=True, max_tokens=get_max_tokens("git-summarize"))
+    settle_result = await _settle_payment(request, "git-summarize", reserved, tokens)
+    if settle_result:
+        microunits, multiplier, tier = settle_result
+        return build_upto_response(result, request, microunits, multiplier, tier, tokens)
     return ServiceResponse(result=result, payment_network=get_network(request), payment_tx=get_tx(request))
 
 
@@ -200,9 +253,13 @@ async def debug_log(request: Request, body: DebugLogRequest):
     if not ok:
         return JSONResponse(status_code=402, content=err,
             headers={"PAYMENT-REQUIRED": "true"})
-    if not await _pre_check_credits(request, "debug-log"):
+    reserved = await _pre_deduct_service(request, "debug-log")
+    if reserved is None:
         return JSONResponse(status_code=402, content={"error": "insufficient_credits"})
     content = f"Context: {body.context or 'CI/CD build failure'}\n\nError log:\n{body.log}"
-    result, tokens = await cached_completion("debug-log", content, DEBUG_LOG_PROMPT, None, json_mode=True, max_tokens=get_max_tokens("debug-log"))
-    await _settle_payment(request, "debug-log", tokens)
+    result, tokens, _ = await cached_completion("debug-log", content, DEBUG_LOG_PROMPT, None, json_mode=True, max_tokens=get_max_tokens("debug-log"))
+    settle_result = await _settle_payment(request, "debug-log", reserved, tokens)
+    if settle_result:
+        microunits, multiplier, tier = settle_result
+        return build_upto_response(result, request, microunits, multiplier, tier, tokens)
     return ServiceResponse(result=result, payment_network=get_network(request), payment_tx=get_tx(request))

@@ -17,9 +17,9 @@ Protocol: MCP (Model Context Protocol)
 | Parameter | Value |
 |-----------|-------|
 | Token | USDC |
-| Networks | Base (`eip155:8453`), Arbitrum (`eip155:42161`), Optimism (`eip155:10`) |
+| Networks | Base (`eip155:8453`), Arbitrum (`eip155:42161`), Optimism (`eip155:10`), BNB Chain (`eip155:56`), Tron (`tron:0x2b6653dc`) |
 | Wallet | `0xdE7eb04faE758055642f67f30D246CcB7136C95E` |
-| Min payment | $0.0005 USDC |
+| Min payment | $0.001 USDC |
 
 **API key** (human developers): pass `api_key=ak-<your-key>`.
 
@@ -59,7 +59,7 @@ Protocol: MCP (Model Context Protocol)
 - **debug-log** ($0.01-$0.03) — CI/CD error log analysis — root cause and fix suggestions
 
 ### Micro-tasks (exact flat pricing)
-- **validate-json** ($0.0005) — Validate JSON/YAML structure
+- **validate-json** ($0.001) — Validate JSON/YAML structure
 - **classify-text** ($0.001) — Sentiment, category, keywords
 - **extract-data** ($0.005) — Extract structured data from text
 - **generate-regex** ($0.002) — Regex from description with tests

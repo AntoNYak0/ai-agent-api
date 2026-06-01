@@ -49,15 +49,16 @@ def stats() -> dict:
 
 
 async def cached_completion(tool: str, user_content: str, system_prompt: str, context: str | None = None, json_mode: bool = True, max_tokens: int = 2048):
-    """Cache-aware DeepSeek call. Returns (result, tokens) tuple.
+    """Cache-aware DeepSeek call. Returns (result, tokens, was_compressed) tuple.
     Checks cache before calling DeepSeek. Stores result on cache miss.
+    Cache hits: was_compressed=False (stored result, no compression needed).
     """
     cache_content = f"{system_prompt}|{user_content}"
     cached = get(tool, cache_content)
     if cached:
-        return cached, 0  # 0 tokens = cache hit, no cost
+        return cached, 0, False  # 0 tokens = cache hit, no compression
 
     from app.services.deepseek import deepseek_completion
-    result, tokens = await deepseek_completion(system_prompt, user_content, context, json_mode, max_tokens)
+    result, tokens, compressed = await deepseek_completion(system_prompt, user_content, context, json_mode, max_tokens)
     set(tool, cache_content, result)
-    return result, tokens
+    return result, tokens, compressed

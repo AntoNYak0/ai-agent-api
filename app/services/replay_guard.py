@@ -22,6 +22,26 @@ DB_PATH = os.path.join(DB_DIR, "replay.db") if os.path.exists("/opt/agent-api") 
 _lock = threading.Lock()
 _conn: sqlite3.Connection | None = None
 
+# In-memory counter for replay blocks (resets on restart)
+_replay_block_count: int = 0
+
+
+def _increment_replay_block() -> None:
+    """Thread-safe increment of replay block counter."""
+    global _replay_block_count
+    _replay_block_count += 1
+
+
+def get_stats() -> dict:
+    """Return replay guard statistics — entries count, blocks since restart."""
+    conn = _get_conn()
+    count = conn.execute("SELECT COUNT(*) FROM fingerprints").fetchone()[0]
+    return {
+        "entries": count,
+        "max_entries": MAX_ENTRIES,
+        "blocks_since_restart": _replay_block_count,
+    }
+
 
 def _get_conn() -> sqlite3.Connection:
     """Persistent connection pool — single connection, reused across calls."""
@@ -55,7 +75,12 @@ def _prune(conn: sqlite3.Connection) -> None:
 
 
 def is_replay(payment_tx: str, tool_name: str) -> bool:
-    """Return True if this payment_tx was already used for this tool."""
+    """Return True if this payment_tx was already used for this tool.
+
+    Uses INSERT OR IGNORE with rowcount check for process-safe atomicity.
+    The UNIQUE PRIMARY KEY on `hash` guarantees only one INSERT succeeds
+    across all processes, regardless of threading.Lock scope.
+    """
     if not payment_tx:
         return False
 
@@ -67,23 +92,25 @@ def is_replay(payment_tx: str, tool_name: str) -> bool:
         conn = _get_conn()
         _prune(conn)
 
-        row = conn.execute(
-            "SELECT created_at FROM fingerprints WHERE hash = ?",
-            (fingerprint,),
-        ).fetchone()
-
-        if row:
-            age = time.time() - row[0]
-            logger.warning(
-                "Replay detected: tool=%s tx=%s... age=%.1fs",
-                tool_name, payment_tx[:16], age,
-            )
-            return True
-
-        conn.execute(
-            "INSERT OR REPLACE INTO fingerprints (hash, tool_name, created_at) "
+        cursor = conn.execute(
+            "INSERT OR IGNORE INTO fingerprints (hash, tool_name, created_at) "
             "VALUES (?, ?, ?)",
             (fingerprint, tool_name, time.time()),
         )
         conn.commit()
+
+        if cursor.rowcount == 0:
+            # INSERT did nothing — fingerprint already existed → REPLAY
+            row = conn.execute(
+                "SELECT created_at FROM fingerprints WHERE hash = ?",
+                (fingerprint,),
+            ).fetchone()
+            age = time.time() - row[0] if row else 0
+            logger.warning(
+                "Replay detected: tool=%s tx=%s... age=%.1fs",
+                tool_name, payment_tx[:16], age,
+            )
+            _increment_replay_block()
+            return True
+
         return False

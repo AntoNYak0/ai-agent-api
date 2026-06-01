@@ -227,7 +227,7 @@ async def x402_manifest():
             "Payments via x402 in USDC (Base, Arbitrum, Optimism). "
             f"{len(_SVC)} services: code audit, refactoring, DeFi analysis, "
             "Solidity scanner, SQL/NL tools, data feeds, security tools, micro-tasks. "
-            "Prices: $0.0005–$1.00 USDC per call. "
+            "Prices: $0.001–$1.00 USDC per call. "
             "All responses are machine-readable JSON."
         ),
         "version": "2.0.0",
@@ -254,7 +254,7 @@ async def x402_manifest():
 @router.get("/.well-known/agentic-market-services.json")
 async def agentic_market_services():
     """Agentic Market service listing — https://api.agentic.market/v1/services/ compatible schema."""
-    networks_short = ["base", "arbitrum", "optimism"]
+    networks_short = ["base", "arbitrum", "optimism", "bnb"]
 
     services = []
     for path, info in sorted(_SVC.items()):

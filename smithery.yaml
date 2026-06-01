@@ -105,7 +105,7 @@ tools:
   # Micro-tasks (exact pricing)
   - name: validate-json
     description: Validate JSON/YAML structure, schema, types
-    pricing: $0.0005 USDC
+    pricing: $0.001 USDC
 
   - name: classify-text
     description: Classify text — sentiment, category, keywords, language

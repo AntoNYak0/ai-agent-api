@@ -21,6 +21,7 @@ EVM_NETWORKS = [
     "eip155:8453",    # Base
     "eip155:42161",   # Arbitrum
     "eip155:10",      # Optimism
+    "eip155:56",      # BNB Smart Chain
 ]
 TRON_NETWORK = "tron:0x2b6653dc"
 
@@ -31,6 +32,8 @@ NETWORKS = [
      "contract": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"},
     {"caip2": "eip155:10", "name": "Optimism", "asset": "USDC",
      "contract": "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85"},
+    {"caip2": "eip155:56", "name": "BNB Chain", "asset": "USDC",
+     "contract": "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d"},
     {"caip2": "tron:0x2b6653dc", "name": "Tron", "asset": "USDT",
      "contract": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"},
 ]
@@ -244,9 +247,9 @@ EXACT_SERVICES = {
     "validate_json": {
         "path": "/api/validate-json",
         "description": "Validate JSON/YAML structure, schema, types",
-        "price": "$0.0005",
+        "price": "$0.001",
         "max_tokens": 500,
-        "microunits": 500,
+        "microunits": 1000,
         "input": {"data": "string", "schema": "string (optional)"},
         "output": {"valid": "boolean", "errors": "[{line,message,fix}]", "warnings": "[{line,message}]"},
     },
@@ -376,6 +379,45 @@ COMPOSITE_SKILLS = {
         "input": {"text": "string", "target_format": "csv|json|yaml"},
     },
 }
+
+
+def calc_upto_cost(base_microunits: int, tokens_used: int, max_microunits: int) -> tuple[int, float, str]:
+    """Calculate actual upto cost with complexity multiplier.
+
+    Complexity tiers based on response token count:
+      - Simple   (< 500 tokens):  0.5x base — quick answer, less than advertised
+      - Normal   (500–3000):      1.0x base — standard pricing
+      - Complex  (> 3000):        1.5x base — premium but capped at max
+
+    Returns (microunits, complexity_multiplier, tier_label).
+    """
+    if tokens_used < 500:
+        multiplier = 0.5
+        tier = "simple"
+    elif tokens_used <= 3000:
+        multiplier = 1.0
+        tier = "normal"
+    else:
+        multiplier = 1.5
+        tier = "complex"
+
+    token_cost = (tokens_used / 1000) * PER_1K_TOKENS_MICROUNITS
+    actual = int(base_microunits * multiplier + token_cost)
+    return min(actual, max_microunits), multiplier, tier
+
+
+def get_upto_caps(service_key: str) -> tuple[int, int] | None:
+    """Return (base_microunits, max_microunits) for an upto service.
+
+    Accepts both pricing keys ("defi_analyze") and short/MCP keys ("defi", "audit").
+    Returns None if the service is not an upto service.
+    """
+    pricing_key = _TOOL_NAMES.get(service_key, service_key)
+    svc = AI_UPTO_SERVICES.get(pricing_key)
+    if svc and "base_microunits" in svc:
+        max_microunits = int(float(svc["max_price"].replace("$", "")) * 1_000_000)
+        return svc["base_microunits"], max_microunits
+    return None
 
 
 def get_max_tokens(service_key: str) -> int:

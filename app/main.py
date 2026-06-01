@@ -8,6 +8,8 @@ from app.well_known import router as well_known_router
 from app.mcp_server import mcp as mcp_app
 from app.pricing import ALL_SERVICES, COMPOSITE_SKILLS, NETWORKS, WALLET
 from app.services import credits, rate_limiter, analytics
+from app.services import replay_guard
+from app.services.deepseek import get_injection_stats
 
 # ---------------------------------------------------------------------------
 # File logging — production: /opt/agent-api/logs/app.log  (10 MB rotated, 5 backups)
@@ -142,6 +144,8 @@ async def dashboard():
     analytics_data = analytics.get_stats(1)
     attempts_data = analytics.get_attempts()
     rl = rate_limiter.get_stats()
+    rg = replay_guard.get_stats()
+    inj = get_injection_stats()
     return HTMLResponse(f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -194,9 +198,25 @@ a {{ color:#58a6ff }}
 </div>
 
 <div class="card">
+<h2>Security</h2>
+<div class="row">
+<div class="stat"><div class="n" style="color:{'#f85149' if inj['blocks_total'] > 0 else '#3fb950'}">{inj['blocks_total']}</div><div class="l">Injection Blocks</div></div>
+<div class="stat"><div class="n" style="color:{'#f85149' if rg['blocks_since_restart'] > 0 else '#3fb950'}">{rg['blocks_since_restart']}</div><div class="l">Replay Blocks</div></div>
+<div class="stat"><div class="n" style="color:{'#f85149' if rl['blocks_total'] > 10 else '#3fb950'}">{rl['blocks_total']}</div><div class="l">Rate-limit Blocks</div></div>
+<div class="stat"><div class="n">{rl['tracked_ips']}</div><div class="l">Tracked IPs</div></div>
+<div class="stat"><div class="n">{rg['entries']}</div><div class="l">Tx Fingerprints</div></div>
+</div>
+<p style="margin-top:12px;color:#8b949e;font-size:12px">
+<a href="/health/security" style="color:#58a6ff">/health/security</a> ·
+<a href="/health/metrics" style="color:#58a6ff">/health/metrics</a> ·
+{inj['patterns_count']} injection patterns · {inj['window_seconds']}s window · TTL: 30min
+</p>
+</div>
+
+<div class="card">
 <h2>Quick Start — Free Trial</h2>
 <code>curl https://agent-api-ai.duckdns.org/api/validate-json -H "Content-Type: application/json" -d '{{"data":"{{\\"name\\":\\"test\\"}}"}}'</code>
-<p style="margin-top:8px;color:#8b949e;font-size:12px">validate-json requires x402 USDC payment ($0.0005) or API key credits. All 24 endpoints are pay-per-call.</p>
+<p style="margin-top:8px;color:#8b949e;font-size:12px">validate-json requires x402 USDC payment ($0.001) or API key credits. All 24 endpoints are pay-per-call.</p>
 </div>
 
 <div class="card">
@@ -204,7 +224,7 @@ a {{ color:#58a6ff }}
 <p style="color:#8b949e;margin-bottom:12px">Send USDC to the address below, then contact to top up your key. 1 credit = $0.001.</p>
 <div style="background:#0d1117;border-radius:6px;padding:14px;margin-bottom:12px;display:flex;align-items:center;gap:14px">
 <div style="flex:1">
-<div style="font-size:12px;color:#8b949e;margin-bottom:4px">USDC (Base / Arbitrum / Optimism)</div>
+<div style="font-size:12px;color:#8b949e;margin-bottom:4px">USDC (Base / Arbitrum / Optimism / BNB Chain)</div>
 <code style="font-size:13px;word-break:break-all">0xdE7eb04faE758055642f67f30D246CcB7136C95E</code>
 </div>
 <img src="https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=0xdE7eb04faE758055642f67f30D246CcB7136C95E" width="60" height="60" style="border-radius:4px" alt="USDC QR">
@@ -364,10 +384,23 @@ async def health():
     }
 
 
+# Cache for /health/deep — UptimeRobot polls every 5 min, avoid wasting RPC calls.
+# TTL slightly over 5 min so UptimeRobot polls always hit the cache.
+_health_deep_cache: dict | None = None
+_health_deep_cache_time: float = 0.0
+_HEALTH_DEEP_CACHE_TTL = 310.0  # seconds (5min10s — covers UptimeRobot 5-min interval)
+
+
 @app.get("/health/deep")
 async def health_deep():
     """Deep health check — verifies ALL dependencies (DeepSeek, billing, RPCs)."""
     import time
+
+    global _health_deep_cache, _health_deep_cache_time
+
+    now = time.time()
+    if _health_deep_cache is not None and (now - _health_deep_cache_time) < _HEALTH_DEEP_CACHE_TTL:
+        return _health_deep_cache
 
     import asyncio
     import httpx
@@ -407,6 +440,7 @@ async def health_deep():
         "base": "https://mainnet.base.org",
         "arbitrum": "https://arb1.arbitrum.io/rpc",
         "optimism": "https://mainnet.optimism.io",
+        "bsc": "https://bsc-dataseed1.binance.org",
     }
     async with httpx.AsyncClient(timeout=10) as client:
         for chain, rpc_url in rpcs.items():
@@ -438,7 +472,62 @@ async def health_deep():
                 results["status"] = "degraded"
 
     # Override: if deepseek is down, it's degraded (even if RPCs are fine)
+    _health_deep_cache = dict(results)
+    _health_deep_cache["cached_at"] = round(now, 1)
+    _health_deep_cache_time = now
     return results
+
+
+@app.get("/health/security")
+async def health_security():
+    """Security health check — replay guard, rate limiter, prompt injection stats."""
+    rl = rate_limiter.get_stats()
+    rg = replay_guard.get_stats()
+    inj = get_injection_stats()
+
+    # Determine overall security status
+    status = "ok"
+    warnings = []
+
+    if inj["recent_attempts"] >= inj["escalation_threshold"]:
+        status = "critical"
+        warnings.append(
+            f"Prompt injection ESCALATION: {inj['recent_attempts']} attempts "
+            f"in {inj['window_seconds']}s (threshold: {inj['escalation_threshold']})"
+        )
+    elif inj["blocks_total"] > 0 or rg["blocks_since_restart"] > 0:
+        status = "warning"
+        if inj["blocks_total"] > 0:
+            warnings.append(f"{inj['blocks_total']} prompt injection attempts blocked")
+        if rg["blocks_since_restart"] > 0:
+            warnings.append(f"{rg['blocks_since_restart']} replay attacks blocked")
+        if rl["blocks_total"] > 10:
+            warnings.append(f"{rl['blocks_total']} rate-limit blocks (high)")
+
+    return {
+        "status": status,
+        "warnings": warnings if warnings else None,
+        "rate_limiter": {
+            "tracked_ips": rl["tracked_ips"],
+            "limited_ips": rl["limited_ips"],
+            "blocks_total": rl["blocks_total"],
+            "max_per_minute": 10,
+        },
+        "replay_guard": {
+            "fingerprints_stored": rg["entries"],
+            "max_fingerprints": rg["max_entries"],
+            "blocks_since_restart": rg["blocks_since_restart"],
+            "ttl_minutes": 30,
+        },
+        "prompt_injection": {
+            "blocks_total": inj["blocks_total"],
+            "recent_attempts": inj["recent_attempts"],
+            "window_seconds": inj["window_seconds"],
+            "escalation_threshold": inj["escalation_threshold"],
+            "max_threshold": inj["max_threshold"],
+            "patterns_active": inj["patterns_count"],
+        },
+    }
 
 
 @app.get("/health/metrics")
@@ -449,6 +538,8 @@ async def health_metrics():
     stats = analytics.get_stats(1)
     attempts = analytics.get_attempts()
     rl = rate_limiter.get_stats()
+    rg = replay_guard.get_stats()
+    inj = get_injection_stats()
 
     lines = [
         "# HELP api_calls_total Total API calls (24h)",
@@ -472,6 +563,21 @@ async def health_metrics():
         "# HELP api_active_keys Active API keys",
         "# TYPE api_active_keys gauge",
         f"api_active_keys {credits.get_stats().get('active_keys', 0)}",
+        "# HELP api_rate_limit_blocks_total Rate limit blocks since restart",
+        "# TYPE api_rate_limit_blocks_total counter",
+        f"api_rate_limit_blocks_total {rl.get('blocks_total', 0)}",
+        "# HELP api_replay_blocks_total Replay attack blocks since restart",
+        "# TYPE api_replay_blocks_total counter",
+        f"api_replay_blocks_total {rg.get('blocks_since_restart', 0)}",
+        "# HELP api_injection_blocks_total Prompt injection blocks since restart",
+        "# TYPE api_injection_blocks_total counter",
+        f"api_injection_blocks_total {inj.get('blocks_total', 0)}",
+        "# HELP api_replay_fingerprints Replay guard stored fingerprints",
+        "# TYPE api_replay_fingerprints gauge",
+        f"api_replay_fingerprints {rg.get('entries', 0)}",
+        "# HELP api_injection_recent_attempts Injection attempts in current window",
+        "# TYPE api_injection_recent_attempts gauge",
+        f"api_injection_recent_attempts {inj.get('recent_attempts', 0)}",
     ]
 
     # Per-tool breakdown

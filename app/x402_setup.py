@@ -18,6 +18,8 @@ from x402.http.facilitator_client import HTTPFacilitatorClient, FacilitatorConfi
 from app.facilitator import DirectFacilitator
 from app.config import settings
 
+from app.services.replay_guard import is_replay
+
 logger = logging.getLogger("x402")
 
 CDP_FACILITATOR_URL = "https://api.cdp.coinbase.com/platform/v2/x402"
@@ -265,7 +267,7 @@ def configure_x402(
         )
 
     paywall = PaywallConfig(
-        app_name="AI Agent API — 16 pay-per-call services ($0.0005–$0.08 USDC)",
+        app_name="AI Agent API — 24 pay-per-call services ($0.001–$1.00 USDC)",
     )
 
     from app.services import analytics
@@ -291,6 +293,55 @@ def configure_x402(
             response.headers["Settlement-Overrides"] = json.dumps({"amount": str(amount)})
             logger.info("PAYMENT-RESPONSE: settlement override %d microunits", amount)
         return response
+
+    @app.middleware("http")
+    async def x402_replay_guard_middleware(request, call_next):
+        """Prevent cross-endpoint payment_tx replay for all REST routes.
+
+        Runs AFTER x402 validates payment (payment_payload is set) but
+        BEFORE the route handler. Binds each payment_tx to the URL path
+        so a payment used on /api/audit cannot be reused on /api/defi-analyze.
+        """
+        # API key users have their own credit system — skip
+        if hasattr(request.state, "human_api_key"):
+            return await call_next(request)
+
+        # No payment payload — let route handler's validate_min_price() 402
+        if not hasattr(request.state, "payment_payload"):
+            return await call_next(request)
+
+        try:
+            payment_tx = request.state.payment_payload.payload.get(
+                "transactionHash", ""
+            )
+        except (AttributeError, TypeError):
+            return await call_next(request)
+
+        if not payment_tx or payment_tx == "unknown":
+            return await call_next(request)
+
+        # Bind to URL path: payment used on /api/audit can't be reused on /api/defi
+        tool_name = request.url.path
+
+        if is_replay(payment_tx, tool_name):
+            logger.warning(
+                "Replay blocked: tx=%s... path=%s",
+                payment_tx[:16], tool_name,
+            )
+            return JSONResponse(
+                status_code=402,
+                content={
+                    "error": "payment_already_used",
+                    "message": (
+                        f"Payment {payment_tx[:16]}... was already used for "
+                        f"{tool_name}. Send a new transaction to call this "
+                        f"endpoint again."
+                    ),
+                },
+                headers={"PAYMENT-REQUIRED": "true"},
+            )
+
+        return await call_next(request)
 
     @app.middleware("http")
     async def x402_payment_middleware(request, call_next):

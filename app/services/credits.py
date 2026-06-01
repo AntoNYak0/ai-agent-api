@@ -10,11 +10,15 @@ Keys stored as SHA-256 hashes — plaintext keys never written to disk.
 """
 
 import json
+import math
 import secrets
 import hashlib
 import time
 import threading
+import logging
 from pathlib import Path
+
+logger = logging.getLogger("credits")
 
 DATA_DIR = Path("/opt/agent-api/data")
 CREDITS_FILE = DATA_DIR / "credits.json"
@@ -24,6 +28,16 @@ _lock = threading.Lock()
 # Credit prices: 1 credit = $0.001 USDC equivalent
 # Stripe commission ~3%, so human price is ~1.5x crypto price
 CREDITS_PER_CENT = 10  # 10 credits = $0.01
+CREDIT_MULTIPLIER = 1.5  # human markup over crypto price
+
+
+def _microunits_to_credits(microunits: int) -> int:
+    """Convert microunits to credit units (1 credit = $0.001, 1.5x markup).
+
+    Formula: credits = round_up_cents(microunits / 10000 * 1.5) * 10
+    """
+    cents = max(1, math.floor((microunits / 10000 * CREDIT_MULTIPLIER) + 0.5))
+    return cents * CREDITS_PER_CENT
 
 
 def _hash_key(api_key: str) -> str:
@@ -138,6 +152,55 @@ def spend_credits(api_key: str, amount_cents: int) -> bool:
         entry["last_used"] = time.time()
         _save(data)
     return True
+
+
+def pre_deduct_max(api_key: str, max_microunits: int) -> bool:
+    """Atomically pre-deduct at MAX possible cost BEFORE AI call.
+
+    This closes the TOCTOU race between balance check and deduction
+    by combining them into a single lock acquisition. Call
+    finalize_deduction() after the AI call to refund the difference.
+    """
+    credits_needed = _microunits_to_credits(max_microunits)
+    with _lock:
+        data = _load()
+        storage_key = _resolve_key(data, api_key)
+        if not storage_key:
+            return False
+        entry = data["keys"][storage_key]
+        if entry["credits"] < credits_needed:
+            return False
+        entry["credits"] -= credits_needed
+        entry["total_spent_credits"] += credits_needed
+        entry["last_used"] = time.time()
+        _save(data)
+    return True
+
+
+def finalize_deduction(api_key: str, reserved_microunits: int,
+                       actual_microunits: int) -> None:
+    """Refund the difference between max (pre-deducted) and actual cost.
+
+    Called after the AI call completes. Reserved >= actual by design
+    (actual is capped at max_price, which equals reserved).
+    """
+    reserved_credits = _microunits_to_credits(reserved_microunits)
+    actual_credits = _microunits_to_credits(actual_microunits)
+    refund = reserved_credits - actual_credits
+    if refund <= 0:
+        return
+    with _lock:
+        data = _load()
+        storage_key = _resolve_key(data, api_key)
+        if not storage_key:
+            logger.error(
+                "finalize_deduction: API key %s... vanished — refund lost (%d credits)",
+                api_key[:10], refund,
+            )
+            return
+        data["keys"][storage_key]["credits"] += refund
+        data["keys"][storage_key]["total_spent_credits"] -= refund
+        _save(data)
 
 
 def get_balance(api_key: str) -> dict | None:

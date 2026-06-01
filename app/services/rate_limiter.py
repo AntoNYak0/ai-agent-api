@@ -9,6 +9,7 @@ CLEANUP_EVERY = 60  # seconds between cleanup passes
 _lock = threading.Lock()
 _ips: dict[str, list[float]] = {}
 _last_cleanup = time.time()
+_blocks_total: int = 0  # cumulative blocks since restart
 
 
 def _cleanup():
@@ -38,6 +39,8 @@ def is_allowed(ip: str) -> bool:
         window = [t for t in _ips[ip] if now - t < 60]
         _ips[ip] = window
         if len(window) >= MAX_REQUESTS_PER_MINUTE:
+            global _blocks_total
+            _blocks_total += 1
             return False
         _ips[ip].append(now)
         return True
@@ -55,4 +58,5 @@ def get_stats() -> dict:
         return {
             "tracked_ips": len(_ips),
             "limited_ips": sum(1 for times in _ips.values() if len(times) >= MAX_REQUESTS_PER_MINUTE),
+            "blocks_total": _blocks_total,
         }

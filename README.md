@@ -1,4 +1,4 @@
-# AI Agent API — 29 pay-per-call AI services via USDC
+# AI Agent API — 24 REST + 29 MCP AI services via USDC micropayments
 
 [![CI](https://github.com/AntoNYak0/ai-agent-api/actions/workflows/ci.yml/badge.svg)](https://github.com/AntoNYak0/ai-agent-api/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -21,6 +21,14 @@ curl -X POST https://agent-api-ai.duckdns.org/api/validate-json \
   -H "Content-Type: application/json" \
   -d '{"data": "{\"name\": \"test\"}"}'
 # → HTTP 402 + PAYMENT-REQUIRED header with price and payment details
+```
+
+## Docker
+
+```bash
+docker build -t agent-api .
+docker compose up -d
+curl http://localhost:8000/health
 ```
 
 ## 29 MCP Tools + 24 REST Services
@@ -67,7 +75,7 @@ curl -X POST https://agent-api-ai.duckdns.org/api/validate-json \
 
 | Service | Price | Description |
 |---|---|---|
-| `validate-json` | $0.0005 | Validate JSON/YAML structure |
+| `validate-json` | $0.001 | Validate JSON/YAML structure |
 | `classify-text` | $0.001 | Sentiment, category, keywords |
 | `extract-data` | $0.005 | Extract names, emails, phones, URLs |
 | `generate-regex` | $0.002 | Regex from description with tests |
@@ -85,6 +93,7 @@ USDC on Base, Arbitrum, Optimism or USDT on Tron. All EVM chains use the same wa
 | Base | USDC | `0xdE7eb04faE758055642f67f30D246CcB7136C95E` |
 | Arbitrum | USDC | `0xdE7eb04faE758055642f67f30D246CcB7136C95E` |
 | Optimism | USDC | `0xdE7eb04faE758055642f67f30D246CcB7136C95E` |
+| BNB Chain | USDC | `0xdE7eb04faE758055642f67f30D246CcB7136C95E` |
 | Tron | USDT | `TADavZEHddjYMQcL2cnaFadFVKAUmP9wMw` |
 
 ### API Keys (human developers)
@@ -132,6 +141,15 @@ For AI agents: read [AGENTS.md](AGENTS.md) for connection instructions.
   "payment_tx": "0x..."
 }
 ```
+
+## Security
+
+- **[SECURITY.md](SECURITY.md)** — full security policy
+- **`/health/security`** — real-time security status with attack detection
+- **`/health/metrics`** — Prometheus metrics for rate limits, replay blocks, injection attempts
+- **13 regex patterns** — prompt injection defense (jailbreak, role-switching, prompt leakage)
+- **Rate limiting** — 10 req/min per IP + cumulative block counter
+- **Replay protection** — SQLite-backed payment tx dedup
 
 ## Links
 
