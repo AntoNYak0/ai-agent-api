@@ -1,6 +1,14 @@
+import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
 from app.main import app
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "integration: tests that make real RPC/network calls (skip with -m 'not integration')"
+    )
 
 
 @pytest_asyncio.fixture(autouse=True)

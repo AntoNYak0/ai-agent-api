@@ -86,13 +86,17 @@ def _save(data: dict) -> None:
         raise
 
 
+# Welcome credits for new API keys — free trial to attract developers
+WELCOME_CREDITS = 50  # $0.05 equivalent (enough for 10-50 test API calls)
+
+
 def generate_api_key() -> str:
-    """Generate a new API key. Returns raw key (store it — never shown again)."""
+    """Generate a new API key with 50 welcome credits ($0.05 free trial)."""
     key = "ak-" + secrets.token_hex(16)
     with _lock:
         data = _load()
         data["keys"][_hash_key(key)] = {
-            "credits": 0,
+            "credits": WELCOME_CREDITS,
             "total_spent_credits": 0,
             "earned_credits": 0,
             "created_at": time.time(),

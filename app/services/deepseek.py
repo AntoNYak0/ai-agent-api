@@ -1,12 +1,65 @@
 import asyncio
 import logging
+import random
 import re
 import time
 from collections import deque
-from openai import AsyncOpenAI
+from openai import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    AsyncOpenAI,
+    AuthenticationError,
+    BadRequestError,
+    InternalServerError,
+    RateLimitError,
+)
 from app.config import settings
+from app.services.resilience import (
+    get_circuit_breaker,
+    async_retry,
+    CircuitBreakerOpen as ResilienceCircuitBreakerOpen,
+)
+from app.errors import CircuitBreakerOpen as HttpCircuitBreakerOpen
 
 logger = logging.getLogger("deepseek")
+
+# ── Model routing ──────────────────────────────────────────────────
+# DeepSeek V4 pricing (per 1M tokens):
+#   deepseek-chat (V4 Pro):  $0.42 input, $1.68 output
+#   deepseek-v4-flash:       $0.14 input, $0.42 output  (~3-4x cheaper)
+#
+# Simple tasks → Flash; complex tasks → Pro.
+# Thresholds tuned for agent-api's service catalog:
+#   EXACT_SERVICES (6):   max_tokens 500–1500  → Flash
+#   Simple upto (4):      max_tokens 1500       → Flash
+#   Complex upto (14):    max_tokens 2000–8000  → Pro
+
+MODEL_PRO = "deepseek-chat"
+MODEL_FLASH = "deepseek-v4-flash"
+
+_FLASH_MAX_TOKENS = 1500     # Services with max_tokens <= this → Flash
+_FLASH_INPUT_CHARS = 5000    # Short inputs (<5K chars) → Flash
+
+# Retry only on transient errors — fail fast on auth/bad request
+_RETRYABLE_ERRORS = (APIConnectionError, APITimeoutError, RateLimitError, InternalServerError)
+
+
+def select_model(
+    max_tokens: int = 2048,
+    input_length: int = 0,
+    force_model: str | None = None,
+) -> str:
+    """Route to cheaper Flash model for simple tasks, Pro for complex ones.
+
+    Simple = low max_tokens (≤1500) AND short input (≤5K chars).
+    Override with force_model to bypass routing.
+    """
+    if force_model is not None:
+        return force_model
+    if max_tokens <= _FLASH_MAX_TOKENS and input_length <= _FLASH_INPUT_CHARS:
+        return MODEL_FLASH
+    return MODEL_PRO
 
 # ── Injection attempt rate tracking ─────────────────────────────────
 
@@ -248,10 +301,11 @@ def _sanitize(text: str) -> str:
 client = AsyncOpenAI(
     base_url=settings.deepseek_base_url,
     api_key=settings.deepseek_api_key,
+    timeout=settings.deepseek_socket_timeout,
 )
 
-MAX_RETRIES = 3
-RETRY_DELAYS = [1.0, 2.0, 4.0]
+# Retryable transient errors — retried by async_retry
+_RETRYABLE_ERRORS = (APIConnectionError, APITimeoutError, RateLimitError, InternalServerError)
 
 
 async def deepseek_completion(
@@ -260,17 +314,38 @@ async def deepseek_completion(
     context_window: str | None = None,
     json_mode: bool = False,
     max_tokens: int = 2048,
+    model: str | None = None,
+    force_model: str | None = None,
+    tool: str = "",
+    record_costs: bool = True,
 ) -> tuple[str, int, bool]:
-    """Call DeepSeek with optional context window compression.
+    """Call DeepSeek with context compression, model routing, and cost tracking.
+
+    Args:
+        system_prompt: System prompt text
+        user_content: User input text
+        context_window: Optional additional context (code, logs, etc.)
+        json_mode: Request JSON response format
+        max_tokens: Max output tokens
+        model: Override model selection (default: auto-routed by complexity)
+        force_model: Bypass routing entirely (use for testing)
+        tool: Service name for cost tracking (e.g. "audit", "solidity-scan")
+        record_costs: Whether to record cost in global tracker
 
     Returns (response_text, token_count, was_compressed).
     If total estimated tokens exceed 80% of 1M context, context_window
     is compressed before sending.
     """
+    from app.services.cost_tracker import calc_cost, CostRecord, BudgetExceededError, record_cost as _record
+
     # Sanitize user input against prompt injection
     _sanitize(user_content)
     if context_window:
         _sanitize(context_window)
+
+    # ── Model selection ──
+    input_len = len(user_content) + (len(context_window) if context_window else 0)
+    chosen_model = model or select_model(max_tokens, input_len, force_model)
 
     # ── Context window compression ──
     compressed = False
@@ -301,29 +376,72 @@ async def deepseek_completion(
     messages.append({"role": "user", "content": user_content})
 
     kwargs = {
-        "model": settings.deepseek_model,
+        "model": chosen_model,
         "messages": messages,
         "max_tokens": max_tokens,
     }
     if json_mode:
         kwargs["response_format"] = {"type": "json_object"}
 
-    for attempt in range(MAX_RETRIES):
-        try:
-            response = await client.chat.completions.create(**kwargs)
-            text = response.choices[0].message.content
-            tokens = response.usage.total_tokens if response.usage else 0
-            return text, tokens, compressed
-        except Exception as e:
-            if attempt < MAX_RETRIES - 1:
-                delay = RETRY_DELAYS[attempt]
-                logger.warning(
-                    f"DeepSeek attempt {attempt + 1} failed: {e}. Retrying in {delay}s..."
-                )
-                await asyncio.sleep(delay)
-            else:
-                logger.error(f"DeepSeek failed after {MAX_RETRIES} attempts: {e}")
-                raise DeepSeekError(f"DeepSeek API unavailable after {MAX_RETRIES} retries") from e
+    async def _call_api() -> tuple[str, int, int, int]:
+        """Single DeepSeek API call — wrapped by async_retry for resilience."""
+        response = await client.chat.completions.create(**kwargs)
+        text = response.choices[0].message.content
+        usage = response.usage
+        tokens = usage.total_tokens if usage else 0
+        input_tokens = usage.prompt_tokens if usage else 0
+        output_tokens = usage.completion_tokens if usage else 0
+        return text, tokens, input_tokens, output_tokens
+
+    # ── Circuit breaker guard ──
+    cb = get_circuit_breaker("deepseek")
+    try:
+        cb.before_call()
+    except ResilienceCircuitBreakerOpen as e:
+        raise HttpCircuitBreakerOpen(
+            message=str(e),
+            service_name=e.name,
+            retry_after_seconds=int(e.retry_after_seconds),
+        )
+
+    try:
+        text, tokens, input_tokens, output_tokens = await async_retry(
+            _call_api,
+            max_retries=settings.retry_max_attempts,
+            base_delay=settings.retry_base_delay,
+            max_delay=settings.retry_max_delay,
+            jitter=settings.retry_jitter_enabled,
+            max_cumulative_timeout=settings.retry_max_cumulative_timeout,
+            retryable_exceptions=_RETRYABLE_ERRORS,
+        )
+        cb.on_success()
+
+        # ── Record cost ──
+        if record_costs:
+            cost = calc_cost(chosen_model, input_tokens, output_tokens)
+            _record(CostRecord(
+                model=chosen_model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cost_usd=cost,
+                tool=tool,
+            ))
+            logger.debug(
+                "DeepSeek call: model=%s input=%d output=%d cost=$%.6f tool=%s",
+                chosen_model, input_tokens, output_tokens, cost, tool,
+            )
+
+        return text, tokens, compressed
+
+    except _RETRYABLE_ERRORS as e:
+        cb.on_failure()
+        logger.error("DeepSeek failed after %d retries: %s", settings.retry_max_attempts, e)
+        raise DeepSeekError(f"DeepSeek API unavailable after {settings.retry_max_attempts} retries") from e
+
+    except (AuthenticationError, BadRequestError) as e:
+        # Non-retryable — don't trip breaker (not DeepSeek's fault)
+        logger.error("DeepSeek non-retryable error: %s", e)
+        raise DeepSeekError(f"DeepSeek API error: {e}") from e
 
 
 async def deepseek_completion_stream(
@@ -332,15 +450,27 @@ async def deepseek_completion_stream(
     context_window: str | None = None,
     json_mode: bool = False,
     max_tokens: int = 2048,
+    model: str | None = None,
+    force_model: str | None = None,
+    tool: str = "",
+    record_costs: bool = True,
 ):
     """Stream DeepSeek response chunk by chunk. Yields (text_fragment | was_compressed_flag).
 
     First yielded value is always a bool indicating whether compression was applied.
     Subsequent values are text fragments.
+
+    After the stream completes, the final chunk includes usage info used for cost recording.
     """
+    from app.services.cost_tracker import calc_cost, CostRecord, record_cost as _record
+
     _sanitize(user_content)
     if context_window:
         _sanitize(context_window)
+
+    # ── Model selection ──
+    input_len = len(user_content) + (len(context_window) if context_window else 0)
+    chosen_model = model or select_model(max_tokens, input_len, force_model)
 
     # ── Context window compression ──
     compressed = False
@@ -369,7 +499,7 @@ async def deepseek_completion_stream(
     messages.append({"role": "user", "content": user_content})
 
     kwargs = {
-        "model": settings.deepseek_model,
+        "model": chosen_model,
         "messages": messages,
         "max_tokens": max_tokens,
         "stream": True,
@@ -381,20 +511,82 @@ async def deepseek_completion_stream(
     # Yield compression flag as first value
     yield compressed
 
-    for attempt in range(MAX_RETRIES):
+    # ── Circuit breaker guard ──
+    cb = get_circuit_breaker("deepseek")
+    try:
+        cb.before_call()
+    except ResilienceCircuitBreakerOpen as e:
+        raise HttpCircuitBreakerOpen(
+            message=str(e),
+            service_name=e.name,
+            retry_after_seconds=int(e.retry_after_seconds),
+        )
+
+    # Track usage for cost recording (stream accumulates)
+    input_tokens = 0
+    output_tokens = 0
+
+    max_retries = settings.retry_max_attempts
+    base_delay = settings.retry_base_delay
+    max_delay = settings.retry_max_delay
+    jitter_enabled = settings.retry_jitter_enabled
+    cumulative_start = time.monotonic()
+    cumulative_timeout = settings.retry_max_cumulative_timeout
+
+    for attempt in range(max_retries):
+        # Check cumulative timeout before each attempt
+        if cumulative_timeout > 0:
+            elapsed = time.monotonic() - cumulative_start
+            if elapsed >= cumulative_timeout:
+                cb.on_failure()
+                raise DeepSeekError(
+                    f"DeepSeek stream: cumulative timeout {cumulative_timeout:.1f}s exceeded"
+                )
+
         try:
             stream = await client.chat.completions.create(**kwargs)
             async for chunk in stream:
                 if chunk.choices and chunk.choices[0].delta.content:
                     yield chunk.choices[0].delta.content
+                # Capture usage from final chunk
+                if hasattr(chunk, "usage") and chunk.usage:
+                    input_tokens = chunk.usage.prompt_tokens or 0
+                    output_tokens = chunk.usage.completion_tokens or 0
+
+            cb.on_success()
+
+            # ── Record cost after stream completes ──
+            if record_costs and (input_tokens or output_tokens):
+                cost = calc_cost(chosen_model, input_tokens, output_tokens)
+                _record(CostRecord(
+                    model=chosen_model,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cost_usd=cost,
+                    tool=tool,
+                ))
+                logger.debug(
+                    "DeepSeek stream: model=%s input=%d output=%d cost=$%.6f tool=%s",
+                    chosen_model, input_tokens, output_tokens, cost, tool,
+                )
             return
-        except Exception as e:
-            if attempt < MAX_RETRIES - 1:
-                delay = RETRY_DELAYS[attempt]
+
+        except _RETRYABLE_ERRORS as e:
+            if attempt < max_retries - 1:
+                delay = min(base_delay * (2 ** attempt), max_delay)
+                if jitter_enabled:
+                    delay = delay * (0.5 + random.random() * 0.5)
                 logger.warning(
-                    f"DeepSeek stream attempt {attempt + 1} failed: {e}. Retrying in {delay}s..."
+                    "DeepSeek stream attempt %d/%d failed (transient): %s. Retrying in %.1fs...",
+                    attempt + 1, max_retries, e, delay,
                 )
                 await asyncio.sleep(delay)
             else:
-                logger.error(f"DeepSeek stream failed after {MAX_RETRIES} attempts: {e}")
-                raise DeepSeekError(f"DeepSeek API unavailable after {MAX_RETRIES} retries") from e
+                cb.on_failure()
+                logger.error("DeepSeek stream failed after %d retries: %s", max_retries, e)
+                raise DeepSeekError(f"DeepSeek API unavailable after {max_retries} retries") from e
+
+        except (AuthenticationError, BadRequestError) as e:
+            # Non-retryable — don't trip breaker
+            logger.error("DeepSeek stream non-retryable error: %s", e)
+            raise DeepSeekError(f"DeepSeek API error: {e}") from e

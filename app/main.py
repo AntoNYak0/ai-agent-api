@@ -231,7 +231,7 @@ a {{ color:#58a6ff }}
 </head>
 <body>
 <h1>AI Agent API</h1>
-<p class="sub">16 pay-per-call AI services — DeepSeek V4 Pro (1M context) · x402 USDC · MCP</p>
+<p class="sub">25 REST + 30 MCP AI services — DeepSeek V4 Pro (1M context) · x402 USDC · API keys</p>
 
 <div class="row">
 <div class="card" style="flex:2">

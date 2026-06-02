@@ -43,7 +43,7 @@ _CREDIT_MULTIPLIER = 1.5
 async def stream_tool(
     request: Request,
     tool: str,
-    input: str = Query(..., description="User input/code to process"),
+    input: str = Query(..., max_length=50_000, description="User input/code to process"),
     context: str = Query("", description="Optional context"),
 ):
     """Stream AI response via SSE. Payment required."""

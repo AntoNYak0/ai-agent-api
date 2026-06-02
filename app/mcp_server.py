@@ -1,7 +1,6 @@
 """MCP server — exposes paid AI tools to other AI agents via x402.
 
-29 tools: 18 upto services + 6 micro-tasks + 4 composite skills + run-workflow.
-AI services use upto (usage-based) pricing; micro-tasks use exact (flat) pricing.
+30 tools: 19 upto services + 6 micro-tasks + 4 composite skills + run-workflow.
 All priced for machine-to-machine economy ($0.001–$1.00 USDC).
 """
 import logging
@@ -30,7 +29,10 @@ from app.prompts.micro import (
 from app.prompts.defi_signals import WHALE_TRACKER_PROMPT, SMART_MONEY_PROMPT, PRICE_FEED_PROMPT
 from app.prompts.security import AGENT_AUDIT_PROMPT, CONTRACT_VERIFY_PROMPT, SECURITY_SCORE_PROMPT
 from app.prompts.data_feed import DATA_FEED_PROMPT
+from app.prompts.amm_security import AMM_SECURITY_PROMPT
 from app.services import workflow_registry, workflow_analytics
+from app.services.amm_security import build_security_report
+from app.services.schema_validator import validate_tool_input
 from x402.http.facilitator_client import HTTPFacilitatorClient, FacilitatorConfig
 from app.facilitator import DirectFacilitator, TronFacilitator, TRON_NETWORK, USDT_TRC20_CONTRACT
 from mcp.server.fastmcp.server import TransportSecuritySettings
@@ -58,6 +60,10 @@ SQL services (upto pricing):
 
 Dev tools (upto pricing):
 - git-summarize ($0.005–$0.02 USDC) — git diff to PR description
+- debug-log ($0.005–$0.03 USDC) — analyze error logs, suggest fixes
+
+DeFi security (upto pricing):
+- amm-security-check ($0.0125–$0.05 USDC) — AMM pool audit: slippage, flash loans, oracle deviation, MEV, pool health
 
 Micro-tasks (exact pricing):
 - validate-json ($0.001 USDC) — validate JSON/YAML
@@ -152,6 +158,11 @@ def _safe_summarize_prompt(max_length: int = 100) -> str:
     if "__MAX_LENGTH__" in SUMMARIZE_PROMPT:
         return SUMMARIZE_PROMPT.replace("__MAX_LENGTH__", str(max_length))
     return SUMMARIZE_PROMPT
+
+
+def _v(tool_name: str, params: dict) -> str | None:
+    """Validate tool input BEFORE payment verification. Returns error or None."""
+    return validate_tool_input(tool_name, params)
 
 
 def _deduct_credits(api_key: str, cost_cents: int, tool_name: str = "unknown") -> bool:
@@ -337,6 +348,7 @@ async def _settle_payment(payment_tx: str, actual_amount: int, network: str = "e
 
 @mcp.tool(name="audit", description=f"Security scan with OWASP + SWC taxonomy. Price: {PRICES['audit']} USDC.")
 async def audit_tool(code: str, context: str = "", payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    if err := _v("audit", locals()): return err
     valid, info = await _verify_payment(payment_tx, AMOUNTS["audit"], "audit", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('audit')}"
@@ -352,6 +364,7 @@ async def audit_tool(code: str, context: str = "", payment_tx: str = "", api_key
 
 @mcp.tool(name="refactor", description=f"Refactor legacy code (DRY, SOLID). Price: {PRICES['refactor']} USDC.")
 async def refactor_tool(code: str, instructions: str = "", context: str = "", payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    if err := _v("refactor", locals()): return err
     valid, info = await _verify_payment(payment_tx, AMOUNTS["refactor"], "refactor", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('refactor')}"
@@ -368,6 +381,7 @@ async def refactor_tool(code: str, instructions: str = "", context: str = "", pa
 
 @mcp.tool(name="docs", description=f"Generate technical docs from code. Price: {PRICES['docs']} USDC.")
 async def docs_tool(code: str, context: str = "", payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    if err := _v("docs", locals()): return err
     valid, info = await _verify_payment(payment_tx, AMOUNTS["docs"], "docs", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('docs')}"
@@ -383,6 +397,7 @@ async def docs_tool(code: str, context: str = "", payment_tx: str = "", api_key:
 
 @mcp.tool(name="defi", description=f"DeFi protocol analysis. Price: {PRICES['defi']} USDC.")
 async def defi_tool(protocol: str, chain: str = "Ethereum", details: str = "", onchain_data: str = "", payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    if err := _v("defi", locals()): return err
     valid, info = await _verify_payment(payment_tx, AMOUNTS["defi"], "defi", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('defi')}"
@@ -403,6 +418,7 @@ async def defi_tool(protocol: str, chain: str = "Ethereum", details: str = "", o
 
 @mcp.tool(name="trading", description=f"Crypto trading analytics. Price: {PRICES['trading']} USDC.")
 async def trading_tool(asset: str, timeframe: str = "daily", additional_info: str = "", payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    if err := _v("trading", locals()): return err
     valid, info = await _verify_payment(payment_tx, AMOUNTS["trading"], "trading", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('trading')}"
@@ -423,6 +439,7 @@ async def trading_tool(asset: str, timeframe: str = "daily", additional_info: st
 
 @mcp.tool(name="whale-tracker", description=f"Track whale wallet movements for an asset. Price: {PRICES['whale-tracker']} USDC.")
 async def whale_tracker_tool(asset: str, wallet_address: str = "", timeframe: str = "24h", payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    if err := _v("whale-tracker", locals()): return err
     valid, info = await _verify_payment(payment_tx, AMOUNTS["whale-tracker"], "whale-tracker", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('whale-tracker')}"
@@ -441,6 +458,7 @@ async def whale_tracker_tool(asset: str, wallet_address: str = "", timeframe: st
 
 @mcp.tool(name="smart-money", description=f"Analyze smart money wallet behavior. Price: {PRICES['smart-money']} USDC.")
 async def smart_money_tool(wallet_address: str, chain: str = "ethereum", payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    if err := _v("smart-money", locals()): return err
     valid, info = await _verify_payment(payment_tx, AMOUNTS["smart-money"], "smart-money", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('smart-money')}"
@@ -457,6 +475,7 @@ async def smart_money_tool(wallet_address: str, chain: str = "ethereum", payment
 
 @mcp.tool(name="price-feed", description=f"Get token price and market data. Price: {PRICES['price-feed']} USDC.")
 async def price_feed_tool(token: str, payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    if err := _v("price-feed", locals()): return err
     valid, info = await _verify_payment(payment_tx, AMOUNTS["price-feed"], "price-feed", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('price-feed')}"
@@ -474,6 +493,7 @@ async def price_feed_tool(token: str, payment_tx: str = "", api_key: str = "", n
 
 @mcp.tool(name="solidity-scan", description=f"Solidity vulnerability scanner (SWC Registry). Price: {PRICES['solidity-scan']} USDC.")
 async def solidity_scan_tool(code: str, context: str = "", payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    if err := _v("solidity-scan", locals()): return err
     valid, info = await _verify_payment(payment_tx, AMOUNTS["solidity-scan"], "solidity-scan", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('solidity-scan')}"
@@ -491,6 +511,7 @@ async def solidity_scan_tool(code: str, context: str = "", payment_tx: str = "",
 
 @mcp.tool(name="agent-audit", description=f"Audit AI agent code for safety and compliance. Price: {PRICES['agent-audit']} USDC.")
 async def agent_audit_tool(agent_code: str, behavior_description: str = "", agent_name: str = "", payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    if err := _v("agent-audit", locals()): return err
     valid, info = await _verify_payment(payment_tx, AMOUNTS["agent-audit"], "agent-audit", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('agent-audit')}"
@@ -507,6 +528,7 @@ async def agent_audit_tool(agent_code: str, behavior_description: str = "", agen
 
 @mcp.tool(name="contract-verify", description=f"Verify smart contract against known vulnerabilities. Price: {PRICES['contract-verify']} USDC.")
 async def contract_verify_tool(contract_code: str, contract_name: str = "", chain: str = "ethereum", payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    if err := _v("contract-verify", locals()): return err
     valid, info = await _verify_payment(payment_tx, AMOUNTS["contract-verify"], "contract-verify", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('contract-verify')}"
@@ -523,6 +545,7 @@ async def contract_verify_tool(contract_code: str, contract_name: str = "", chai
 
 @mcp.tool(name="security-score", description=f"Score code security posture. Price: {PRICES['security-score']} USDC.")
 async def security_score_tool(code: str, description: str = "", payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    if err := _v("security-score", locals()): return err
     valid, info = await _verify_payment(payment_tx, AMOUNTS["security-score"], "security-score", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('security-score')}"
@@ -541,6 +564,7 @@ async def security_score_tool(code: str, description: str = "", payment_tx: str 
 
 @mcp.tool(name="nl-to-sql", description=f"Natural language to SQL. Price: {PRICES['nl-to-sql']} USDC.")
 async def nl_to_sql_tool(query: str, payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    if err := _v("nl-to-sql", locals()): return err
     valid, info = await _verify_payment(payment_tx, AMOUNTS["nl-to-sql"], "nl-to-sql", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('nl-to-sql')}"
@@ -556,6 +580,7 @@ async def nl_to_sql_tool(query: str, payment_tx: str = "", api_key: str = "", ne
 
 @mcp.tool(name="sql-to-nl", description=f"SQL to plain English explanation. Price: {PRICES['sql-to-nl']} USDC.")
 async def sql_to_nl_tool(sql: str, payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    if err := _v("sql-to-nl", locals()): return err
     valid, info = await _verify_payment(payment_tx, AMOUNTS["sql-to-nl"], "sql-to-nl", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('sql-to-nl')}"
@@ -573,6 +598,7 @@ async def sql_to_nl_tool(sql: str, payment_tx: str = "", api_key: str = "", netw
 
 @mcp.tool(name="git-summarize", description=f"Git diff to PR description. Price: {PRICES['git-summarize']} USDC.")
 async def git_summarize_tool(diff: str, payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    if err := _v("git-summarize", locals()): return err
     valid, info = await _verify_payment(payment_tx, AMOUNTS["git-summarize"], "git-summarize", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('git-summarize')}"
@@ -588,6 +614,7 @@ async def git_summarize_tool(diff: str, payment_tx: str = "", api_key: str = "",
 
 @mcp.tool(name="translate-code", description=f"Translate code between languages. Price: {PRICES['translate-code']} USDC.")
 async def translate_code_tool(code: str, source_lang: str, target_lang: str, payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    if err := _v("translate-code", locals()): return err
     valid, info = await _verify_payment(payment_tx, AMOUNTS["translate-code"], "translate-code", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('translate-code')}"
@@ -606,6 +633,7 @@ async def translate_code_tool(code: str, source_lang: str, target_lang: str, pay
 
 @mcp.tool(name="data-feed", description=f"Fetch structured data feed on any topic. Price: {PRICES['data-feed']} USDC.")
 async def data_feed_tool(topic: str, format: str = "json", payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    if err := _v("data-feed", locals()): return err
     valid, info = await _verify_payment(payment_tx, AMOUNTS["data-feed"], "data-feed", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('data-feed')}"
@@ -622,6 +650,7 @@ async def data_feed_tool(topic: str, format: str = "json", payment_tx: str = "",
 
 @mcp.tool(name="debug-log", description=f"Analyze error logs and suggest fixes. Price: {PRICES['debug-log']} USDC.")
 async def debug_log_tool(log: str, context: str = "", payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    if err := _v("debug-log", locals()): return err
     valid, info = await _verify_payment(payment_tx, AMOUNTS["debug-log"], "debug-log", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('debug-log')}"
@@ -636,10 +665,191 @@ async def debug_log_tool(log: str, context: str = "", payment_tx: str = "", api_
     return result
 
 
+# ── AMM Security (hybrid: deterministic checks + AI analysis) ──────
+
+@mcp.tool(name="amm-security-check", description=f"AMM pool security audit — slippage, flash loans, oracle deviation, MEV, pool health. Price: {PRICES['amm-security-check']} USDC.")
+async def amm_security_check_tool(
+    pool_address: str = "",
+    chain: str = "ethereum",
+    tokens: str = "",
+    reserve_in: float = 0,
+    reserve_out: float = 0,
+    amount_in: float = 0,
+    fee_bps: float = 30,
+    max_slippage_bps: float = 50,
+    borrow_amount: float = 0,
+    repay_amount: float = 0,
+    same_block: bool = False,
+    pools_involved: int = 1,
+    price_change_pct: float = 0,
+    has_collateral: bool = True,
+    oracle_prices_json: str = "",
+    has_slippage_protection: bool = False,
+    slippage_tolerance_bps: int = 0,
+    uses_commit_reveal: bool = False,
+    has_timelock: bool = False,
+    is_public_mempool: bool = True,
+    tx_value_usd: float = 0,
+    has_deadline: bool = False,
+    deadline_minutes: int = 0,
+    tvl_usd: float = 0,
+    volume_24h_usd: float = 0,
+    reserve0_usd: float = 0,
+    reserve1_usd: float = 0,
+    has_oracle: bool = False,
+    is_verified: bool = False,
+    age_days: int = 0,
+    payment_tx: str = "",
+    api_key: str = "",
+    network: str = "eip155:8453",
+) -> str:
+    """AMM pool security audit — deterministic checks + AI interpretation.
+
+    Provide any subset of parameters — only available data is checked.
+    Returns JSON with programmatic checks AND AI-powered analysis.
+    """
+    import json as _json
+
+    if err := _v("amm-security-check", locals()): return err
+    valid, info = await _verify_payment(payment_tx, AMOUNTS["amm-security-check"], "amm-security-check", api_key, network)
+    if not valid:
+        return f"Payment required: {info}\n\n{_payment_help('amm-security-check')}"
+    use_credits = info.startswith("credits:")
+
+    # Parse tokens list
+    token_list = [t.strip() for t in tokens.split(",") if t.strip()] if tokens else []
+
+    # Parse oracle prices
+    oracle_prices = None
+    if oracle_prices_json:
+        try:
+            oracle_prices = _json.loads(oracle_prices_json)
+        except _json.JSONDecodeError:
+            pass
+
+    # ── Deterministic security checks ──
+    report = build_security_report(
+        pool_address=pool_address,
+        chain=chain,
+        tokens=token_list,
+        slippage_params={
+            "reserve_in": reserve_in,
+            "reserve_out": reserve_out,
+            "amount_in": amount_in,
+            "fee_bps": fee_bps,
+            "max_slippage_bps": max_slippage_bps,
+        } if reserve_in > 0 and reserve_out > 0 and amount_in > 0 else None,
+        flash_loan_params={
+            "borrow_amount": borrow_amount,
+            "repay_amount": repay_amount,
+            "same_block": same_block,
+            "pools_involved": pools_involved,
+            "price_change_pct": price_change_pct,
+            "has_collateral": has_collateral,
+        } if borrow_amount > 0 or not has_collateral else None,
+        oracle_prices=oracle_prices,
+        mev_params={
+            "has_slippage_protection": has_slippage_protection,
+            "slippage_tolerance_bps": slippage_tolerance_bps if slippage_tolerance_bps > 0 else None,
+            "uses_commit_reveal": uses_commit_reveal,
+            "has_timelock": has_timelock,
+            "is_public_mempool": is_public_mempool,
+            "tx_value_usd": tx_value_usd,
+            "has_deadline": has_deadline,
+            "deadline_minutes": deadline_minutes if deadline_minutes > 0 else None,
+        },
+        health_params={
+            "tvl_usd": tvl_usd,
+            "volume_24h_usd": volume_24h_usd if volume_24h_usd > 0 else None,
+            "fee_bps": fee_bps,
+            "reserve0_usd": reserve0_usd if reserve0_usd > 0 else None,
+            "reserve1_usd": reserve1_usd if reserve1_usd > 0 else None,
+            "has_oracle": has_oracle,
+            "is_verified": is_verified,
+            "age_days": age_days if age_days > 0 else None,
+        } if tvl_usd > 0 else None,
+    )
+
+    # ── AI analysis ──
+    deterministic_json = _json.dumps({
+        "pool": {"address": report.pool_address, "chain": report.chain, "tokens": report.tokens},
+        "slippage_check": {
+            "amount_in": report.slippage.amount_in if report.slippage else 0,
+            "expected_output": report.slippage.amount_out_expected if report.slippage else 0,
+            "slippage_pct": report.slippage.slippage_pct if report.slippage else 0,
+            "price_impact_pct": report.slippage.price_impact_pct if report.slippage else 0,
+            "is_safe": report.slippage.is_safe if report.slippage else None,
+            "warning": report.slippage.warning if report.slippage else "",
+        },
+        "flash_loan_check": {
+            "risk_score": report.flash_loan.risk_score if report.flash_loan else 0,
+            "patterns": report.flash_loan.patterns_detected if report.flash_loan else [],
+            "is_suspicious": report.flash_loan.is_suspicious if report.flash_loan else False,
+            "reasoning": report.flash_loan.reasoning if report.flash_loan else "",
+        },
+        "oracle_check": {
+            "prices": report.oracle.prices if report.oracle else {},
+            "median_price": report.oracle.median_price if report.oracle else 0,
+            "max_deviation_pct": report.oracle.max_deviation_pct if report.oracle else 0,
+            "manipulated_source": report.oracle.manipulated_source if report.oracle else None,
+            "is_suspicious": report.oracle.is_suspicious if report.oracle else False,
+            "reasoning": report.oracle.reasoning if report.oracle else "",
+        },
+        "mev_check": {
+            "vulnerable_to_sandwich": report.mev.vulnerable_to_sandwich if report.mev else False,
+            "vulnerable_to_frontrun": report.mev.vulnerable_to_frontrun if report.mev else False,
+            "vulnerable_to_backrun": report.mev.vulnerable_to_backrun if report.mev else False,
+            "risk_score": report.mev.risk_score if report.mev else 0,
+            "findings": report.mev.findings if report.mev else [],
+            "mitigations": report.mev.mitigations if report.mev else [],
+        },
+        "pool_health": {
+            "health_score": report.health.health_score if report.health else 0,
+            "tvl_usd": report.health.tvl_usd if report.health else 0,
+            "volume_to_tvl_ratio": report.health.volume_to_tvl_ratio if report.health else None,
+            "concentration_risk": report.health.concentration_risk if report.health else "unknown",
+            "il_risk": report.health.il_risk if report.health else "unknown",
+            "fee_apy_estimate": report.health.fee_apy_estimate if report.health else None,
+            "warnings": report.health.warnings if report.health else [],
+            "recommendations": report.health.recommendations if report.health else [],
+        },
+        "overall_score": report.overall_score,
+        "critical_findings": report.critical_findings,
+    }, default=str)
+
+    user_content = f"Analyze this AMM pool's security posture based on the deterministic checks below:\n\n{deterministic_json}"
+
+    result, tokens, _ = await deepseek_completion(
+        AMM_SECURITY_PROMPT, user_content, json_mode=True,
+        max_tokens=get_max_tokens("amm-security-check"),
+    )
+
+    # ── Settle payment ──
+    actual = _calc_upto_amount("amm-security-check", tokens)
+    if use_credits:
+        _deduct_credits(api_key, _credits_cost_cents(actual), "amm-security-check")
+    else:
+        await _settle_payment(payment_tx, actual, network)
+
+    # Merge deterministic report with AI analysis
+    try:
+        ai_json = _json.loads(result)
+    except _json.JSONDecodeError:
+        ai_json = {"ai_raw": result}
+
+    final = {
+        "deterministic": _json.loads(deterministic_json),
+        "ai_analysis": ai_json,
+    }
+
+    return _json.dumps(final, indent=2, default=str)
+
+
 # ── Micro-tasks (exact pricing) ──────────────────────────────────
 
 @mcp.tool(name="validate-json", description=f"Validate JSON/YAML structure. Price: {PRICES['validate-json']} USDC.")
 async def validate_json_tool(data: str, schema: str = "", payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    if err := _v("validate-json", locals()): return err
     valid, info = await _verify_payment(payment_tx, AMOUNTS["validate-json"], "validate-json", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('validate-json')}"
@@ -655,6 +865,7 @@ async def validate_json_tool(data: str, schema: str = "", payment_tx: str = "", 
 
 @mcp.tool(name="classify-text", description=f"Classify text sentiment/category. Price: {PRICES['classify-text']} USDC.")
 async def classify_text_tool(text: str, categories: str = "", payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    if err := _v("classify-text", locals()): return err
     valid, info = await _verify_payment(payment_tx, AMOUNTS["classify-text"], "classify-text", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('classify-text')}"
@@ -670,6 +881,7 @@ async def classify_text_tool(text: str, categories: str = "", payment_tx: str = 
 
 @mcp.tool(name="extract-data", description=f"Extract structured data from text. Price: {PRICES['extract-data']} USDC.")
 async def extract_data_tool(text: str, payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    if err := _v("extract-data", locals()): return err
     valid, info = await _verify_payment(payment_tx, AMOUNTS["extract-data"], "extract-data", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('extract-data')}"
@@ -684,6 +896,7 @@ async def extract_data_tool(text: str, payment_tx: str = "", api_key: str = "", 
 
 @mcp.tool(name="generate-regex", description=f"Generate regex from description. Price: {PRICES['generate-regex']} USDC.")
 async def generate_regex_tool(description: str, payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    if err := _v("generate-regex", locals()): return err
     valid, info = await _verify_payment(payment_tx, AMOUNTS["generate-regex"], "generate-regex", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('generate-regex')}"
@@ -698,6 +911,7 @@ async def generate_regex_tool(description: str, payment_tx: str = "", api_key: s
 
 @mcp.tool(name="format-data", description=f"Convert data CSV/JSON/YAML. Price: {PRICES['format-data']} USDC.")
 async def format_data_tool(data: str, source_format: str, target_format: str, payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    if err := _v("format-data", locals()): return err
     valid, info = await _verify_payment(payment_tx, AMOUNTS["format-data"], "format-data", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('format-data')}"
@@ -713,6 +927,7 @@ async def format_data_tool(data: str, source_format: str, target_format: str, pa
 
 @mcp.tool(name="summarize", description=f"Summarize text to N words. Price: {PRICES['summarize']} USDC.")
 async def summarize_tool(text: str, max_length: int = 100, payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    if err := _v("summarize", locals()): return err
     valid, info = await _verify_payment(payment_tx, AMOUNTS["summarize"], "summarize", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('summarize')}"
@@ -737,6 +952,7 @@ _skill_prices = {
 
 @mcp.tool(name="defi-research", description="Full DeFi research: extract on-chain data → analyze protocol → summarize. Price: $0.08 USDC.")
 async def defi_research_tool(protocol: str, chain: str = "ethereum", onchain_data: str = "", payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    if err := _v("defi-research", locals()): return err
     valid, info = await _verify_payment(payment_tx, _skill_prices["defi-research"], "defi-research", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('defi-research')}"
@@ -756,6 +972,7 @@ async def defi_research_tool(protocol: str, chain: str = "ethereum", onchain_dat
 
 @mcp.tool(name="code-health-check", description="Complete code health: security audit → refactor → generate docs. Price: $0.10 USDC.")
 async def code_health_check_tool(code: str, instructions: str = "", payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    if err := _v("code-health-check", locals()): return err
     valid, info = await _verify_payment(payment_tx, _skill_prices["code-health-check"], "code-health-check", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('code-health-check')}"
@@ -772,6 +989,7 @@ async def code_health_check_tool(code: str, instructions: str = "", payment_tx: 
 
 @mcp.tool(name="smart-contract-audit", description="Solidity audit + documentation: scan vulnerabilities → generate audit report. Price: $0.10 USDC.")
 async def smart_contract_audit_tool(code: str, payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    if err := _v("smart-contract-audit", locals()): return err
     valid, info = await _verify_payment(payment_tx, _skill_prices["smart-contract-audit"], "smart-contract-audit", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('smart-contract-audit')}"
@@ -787,6 +1005,7 @@ async def smart_contract_audit_tool(code: str, payment_tx: str = "", api_key: st
 
 @mcp.tool(name="data-pipeline", description="Data processing pipeline: extract entities → convert format → summarize. Price: $0.05 USDC.")
 async def data_pipeline_tool(text: str, target_format: str = "json", payment_tx: str = "", api_key: str = "", network: str = "eip155:8453") -> str:
+    if err := _v("data-pipeline", locals()): return err
     valid, info = await _verify_payment(payment_tx, _skill_prices["data-pipeline"], "data-pipeline", api_key, network)
     if not valid:
         return f"Payment required: {info}\n\n{_payment_help('data-pipeline')}"
@@ -853,6 +1072,7 @@ async def run_workflow_tool(workflow_id: str, input_text: str, payment_tx: str =
     """Execute a registered composite workflow. Pays rev-share to the workflow author."""
     import time as _time
 
+    if err := _v("run-workflow", locals()): return err
     wf = workflow_registry.get_workflow(workflow_id)
     if not wf:
         return f"Workflow not found: {workflow_id}. Browse available workflows at /api/workflows"

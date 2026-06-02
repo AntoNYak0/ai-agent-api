@@ -358,8 +358,11 @@ def configure_x402(
         try:
             response = await x402_mw(request, call_next)
             if response.status_code == 402:
-                # Add human-readable help header
+                # Add human-readable help header + MPP WWW-Authenticate
                 response.headers["X-Payment-Help"] = PAYMENT_HELP.replace("\n", " ")
+                response.headers["WWW-Authenticate"] = (
+                    'Payment realm="AI Agent API", protocols_supported="x402"'
+                )
                 logger.info("402 Payment Required: %s %s", request.method, request.url.path)
                 analytics.increment_attempt(request.url.path)
             return response
@@ -376,5 +379,6 @@ def configure_x402(
                 headers={
                     "PAYMENT-REQUIRED": "true",
                     "X-Payment-Help": PAYMENT_HELP.replace("\n", " "),
+                    "WWW-Authenticate": 'Payment realm="AI Agent API", protocols_supported="x402"',
                 },
             )

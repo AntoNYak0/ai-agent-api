@@ -3,12 +3,57 @@
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from app.pricing import (
-    AI_UPTO_SERVICES, EXACT_SERVICES,
+    AI_UPTO_SERVICES, EXACT_SERVICES, COMPOSITE_SKILLS,
     NETWORKS, WALLET, DOMAIN, GITHUB,
+    _TOOL_NAMES, _PRICING_TO_TOOL,
 )
 from app.services import workflow_registry
 
 router = APIRouter()
+
+# ── MCP composite skill metadata (mirrors @mcp.tool decorators in mcp_server.py) ──
+_COMPOSITE_MCP_TOOLS = [
+    {
+        "name": "defi-research",
+        "description": "Full DeFi research pipeline: extract on-chain data → analyze protocol → summarize. Price: $0.08 USDC.",
+        "price": "$0.08",
+        "input": {"protocol": "string", "chain": "string (optional, default: ethereum)", "onchain_data": "string (optional)"},
+        "output": {"result": "string"},
+    },
+    {
+        "name": "code-health-check",
+        "description": "Complete code health: security audit → refactor → generate documentation. Price: $0.10 USDC.",
+        "price": "$0.10",
+        "input": {"code": "string", "instructions": "string (optional)"},
+        "output": {"result": "string"},
+    },
+    {
+        "name": "smart-contract-audit",
+        "description": "Solidity audit + documentation: scan vulnerabilities → generate audit report. Price: $0.10 USDC.",
+        "price": "$0.10",
+        "input": {"code": "string"},
+        "output": {"result": "string"},
+    },
+    {
+        "name": "data-pipeline",
+        "description": "Data processing pipeline: extract entities → convert format → summarize. Price: $0.05 USDC.",
+        "price": "$0.05",
+        "input": {"text": "string", "target_format": "csv|json|yaml (optional, default: json)"},
+        "output": {"result": "string"},
+    },
+    {
+        "name": "run-workflow",
+        "description": "Execute a user-defined composite workflow chain. Browse available workflows at /api/workflows",
+        "price": "varies",
+        "input": {"workflow_id": "string", "input_text": "string"},
+        "output": {"result": "string"},
+    },
+]
+
+# Individual MCP tool count (from _TOOL_NAMES excluding composite/None entries)
+_MCP_INDIVIDUAL_COUNT = sum(1 for v in _TOOL_NAMES.values() if v is not None)
+_MCP_TOTAL_COUNT = _MCP_INDIVIDUAL_COUNT + len(_COMPOSITE_MCP_TOOLS)
+_REST_COUNT = len(AI_UPTO_SERVICES) + len(EXACT_SERVICES)
 
 # Build lookup dicts for templates
 _SVC = {}
@@ -158,9 +203,11 @@ def _build_openapi_spec() -> dict:
             "title": "AI Agent API",
             "version": "2.0.0",
             "description": (
-                f"{len(_SVC)} pay-per-call AI services via x402 micropayments. "
+                f"{_REST_COUNT} REST services ({len(AI_UPTO_SERVICES)} upto + {len(EXACT_SERVICES)} exact) — "
+                f"pay-per-call AI services via x402 micropayments. "
+                f"Also {_MCP_TOTAL_COUNT} MCP tools at /mcp/sse. "
                 "All responses are machine-readable JSON. "
-                "Pay with USDC on Base, Arbitrum, or Optimism."
+                "Pay with USDC on Base, Arbitrum, Optimism, BNB Chain or USDT on Tron."
             ),
             "contact": {
                 "url": GITHUB,
@@ -170,6 +217,7 @@ def _build_openapi_spec() -> dict:
                 "networks": NETWORKS,
                 "wallet": WALLET,
             },
+            "license": {"name": "MIT"},
         },
         "servers": [{"url": DOMAIN, "description": "Production"}],
         "x-discovery": {
@@ -205,30 +253,28 @@ async def x402_manifest():
             "description": info["summary"],
         }
 
-    # Actual MCP tools (16 individual + 4 composite skills)
-    # NOT auto-generated from _SVC — some REST endpoints have no MCP equivalent
-    available_tools = [
-        "audit", "refactor", "docs", "defi", "trading", "solidity-scan",
-        "nl-to-sql", "sql-to-nl", "git-summarize", "translate-code",
-        "validate-json", "classify-text", "extract-data",
-        "generate-regex", "format-data", "summarize",
-        "defi-research", "code-health-check", "smart-contract-audit", "data-pipeline",
-    ]
+    # Actual MCP tools — all 30 (25 individual + 5 composite/workflow)
+    available_tools = (
+        [mcp_name for mcp_name, pk in sorted(_TOOL_NAMES.items()) if pk is not None]
+        + [ct["name"] for ct in _COMPOSITE_MCP_TOOLS]
+    )
 
     # Build resource URLs for x402scan compatibility
     resources = [f"{DOMAIN}{path}" for path in sorted(_SVC.keys())]
 
     return JSONResponse({
         "x402_version": 2,
-        "name": f"AI Agent API — {len(_SVC)} pay-per-call services for agent pipelines",
+        "name": f"AI Agent API — {_REST_COUNT} REST + {_MCP_TOTAL_COUNT} MCP tools for agent pipelines",
         "resources": resources,
         "description": (
-            "AI services on DeepSeek V4 Pro (1M token context). "
-            "Payments via x402 in USDC (Base, Arbitrum, Optimism). "
-            f"{len(_SVC)} services: code audit, refactoring, DeFi analysis, "
-            "Solidity scanner, SQL/NL tools, data feeds, security tools, micro-tasks. "
-            "Prices: $0.001–$1.00 USDC per call. "
-            "All responses are machine-readable JSON."
+            f"AI services on DeepSeek V4 Pro (1M token context). "
+            f"Payments via x402 in USDC (Base, Arbitrum, Optimism, BNB Chain) or USDT (Tron). "
+            f"{_REST_COUNT} REST services + {_MCP_TOTAL_COUNT} MCP tools: "
+            f"code audit, refactoring, DeFi analysis, "
+            f"Solidity scanner, AMM security, SQL/NL tools, data feeds, security tools, micro-tasks, "
+            f"composite workflows. "
+            f"Prices: $0.001–$1.00 USDC per call. "
+            f"All responses are machine-readable JSON."
         ),
         "version": "2.0.0",
         "contact": {
@@ -236,7 +282,7 @@ async def x402_manifest():
             "email": "admin@agent-api-ai.duckdns.org",
         },
         "payment": {
-            "scheme": "mixed",
+            "scheme": "x402",
             "networks": [
                 {"caip2": n["caip2"], "name": n["name"], "asset": n["asset"]}
                 for n in NETWORKS
@@ -247,6 +293,7 @@ async def x402_manifest():
             "endpoint": "/mcp/sse",
             "transport": "sse",
             "available_tools": available_tools,
+            "total_tools": len(available_tools),
         },
     })
 
@@ -254,7 +301,7 @@ async def x402_manifest():
 @router.get("/.well-known/agentic-market-services.json")
 async def agentic_market_services():
     """Agentic Market service listing — https://api.agentic.market/v1/services/ compatible schema."""
-    networks_short = ["base", "arbitrum", "optimism", "bnb"]
+    networks_short = ["base", "arbitrum", "optimism", "bnb", "tron"]
 
     services = []
     for path, info in sorted(_SVC.items()):
@@ -333,11 +380,27 @@ async def agent_card():
             "output": info["response"],
         })
 
+    # Add composite MCP tools
+    for ct in _COMPOSITE_MCP_TOOLS:
+        tools.append({
+            "name": ct["name"],
+            "description": ct["description"],
+            "method": "POST",
+            "path": "/mcp/sse",
+            "payment": {
+                "scheme": "exact",
+                "price": ct["price"],
+                "currency": "USDC",
+            },
+            "input": ct["input"],
+            "output": ct["output"],
+        })
+
     return JSONResponse({
         "schema_version": "1.0",
         "agent_type": "api",
         "name": "AI Agent API",
-        "description": f"{len(_SVC)} pay-per-call AI services powered by DeepSeek V4 Pro. Payments via x402 protocol.",
+        "description": f"{_REST_COUNT} REST + {_MCP_TOTAL_COUNT} MCP pay-per-call AI services powered by DeepSeek V4 Pro. Payments via x402 protocol.",
         "version": "2.0.0",
         "base_url": DOMAIN,
         "contact": {
@@ -353,6 +416,7 @@ async def agent_card():
         "mcp": {
             "endpoint": "/mcp/sse",
             "transport": "sse",
+            "total_tools": _MCP_TOTAL_COUNT,
         },
         "tools": tools,
     })
@@ -364,22 +428,47 @@ async def mcp_server_card():
     https://smithery.ai/docs/build/publish
     """
     tools = []
-    for path, info in _SVC.items():
-        name = path.replace("/api/", "").replace("-", "_")
+    # Individual MCP tools — use actual MCP names from _TOOL_NAMES (NOT derived from REST paths)
+    for mcp_name, pricing_key in sorted(_TOOL_NAMES.items()):
+        if pricing_key is None:
+            continue  # Composite skills handled separately
+        svc = AI_UPTO_SERVICES.get(pricing_key) or EXACT_SERVICES.get(pricing_key)
+        if not svc:
+            continue
         props = {}
         required = []
-        for k, v in info["body"].items():
-            is_optional = "(optional)" in v
-            props[k] = {"type": "string", "description": v.replace(" (optional)", "")}
+        for k, v in svc.get("input", {}).items():
+            is_optional = "(optional)" in v.lower()
+            props[k] = {"type": "string", "description": v.replace(" (optional)", "").replace(" (optional,", " (")}
             if not is_optional:
                 required.append(k)
         tools.append({
-            "name": name,
-            "description": info["summary"],
+            "name": mcp_name,
+            "description": svc["description"],
             "inputSchema": {
                 "type": "object",
                 "properties": props,
-                "required": required,
+                "required": required if required else [],
+            },
+        })
+
+    # Composite skills + workflow dispatcher
+    for ct in _COMPOSITE_MCP_TOOLS:
+        props = {}
+        required = []
+        for k, v in ct["input"].items():
+            is_optional = "(optional)" in v.lower()
+            clean_desc = v.replace(" (optional)", "").replace(" (optional,", " (")
+            props[k] = {"type": "string", "description": clean_desc}
+            if not is_optional:
+                required.append(k)
+        tools.append({
+            "name": ct["name"],
+            "description": ct["description"],
+            "inputSchema": {
+                "type": "object",
+                "properties": props,
+                "required": required if required else [],
             },
         })
 
@@ -387,12 +476,17 @@ async def mcp_server_card():
         "serverInfo": {
             "name": "ai-agent-api",
             "version": "2.0.0",
-            "description": f"{len(_SVC)} pay-per-call AI services via x402 USDC — code audit, refactoring, DeFi analysis, Solidity scanner, SQL/NL tools, micro-tasks, security, data feeds. Powered by DeepSeek V4 Pro.",
+            "description": (
+                f"{_MCP_TOTAL_COUNT} MCP tools ({_MCP_INDIVIDUAL_COUNT} individual + {len(_COMPOSITE_MCP_TOOLS)} composite) "
+                f"via x402 USDC — code audit, refactoring, DeFi analysis, Solidity scanner, "
+                f"SQL/NL tools, micro-tasks, security, data feeds, composite workflows. "
+                f"Powered by DeepSeek V4 Pro."
+            ),
         },
         "authentication": {
             "required": False,
-            "schemes": ["x402"],
-            "description": "No API key. Pay per call in USDC via x402 on Base/Arbitrum/Optimism.",
+            "schemes": ["x402", "api_key"],
+            "description": "x402 USDC payments (AI agents) or API key credits (human developers). Base, Arbitrum, Optimism, BNB Chain, Tron.",
         },
         "transport": "sse",
         "url": f"{DOMAIN}/mcp/sse",
@@ -409,16 +503,47 @@ async def mcp_server_card():
 @router.get("/.well-known/glama.json")
 async def glama_json():
     """Glama.ai auto-discovery file. Glama scans this to list the server."""
+    tools_list = []
+    # Individual MCP tools
+    for mcp_name, pricing_key in sorted(_TOOL_NAMES.items()):
+        if pricing_key is None:
+            continue
+        svc = AI_UPTO_SERVICES.get(pricing_key) or EXACT_SERVICES.get(pricing_key)
+        if svc:
+            tools_list.append({
+                "name": mcp_name,
+                "description": svc["description"],
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {k: {"type": "string", "description": v.replace(" (optional)", "")} for k, v in svc.get("input", {}).items()},
+                },
+            })
+    # Composite skills
+    for ct in _COMPOSITE_MCP_TOOLS:
+        tools_list.append({
+            "name": ct["name"],
+            "description": ct["description"],
+            "inputSchema": {
+                "type": "object",
+                "properties": {k: {"type": "string", "description": v.replace(" (optional)", "")} for k, v in ct["input"].items()},
+            },
+        })
+
     return JSONResponse({
         "$schema": "https://glama.ai/mcp/schemas/connector.json",
         "name": "AI Agent API",
-        "description": f"{len(_SVC)} pay-per-call AI services: code audit, refactoring, DeFi analysis, Solidity scanner, SQL/NL tools, micro-tasks, security, data feeds. Powered by DeepSeek V4 Pro. Payment via x402 USDC.",
+        "description": (
+            f"{_MCP_TOTAL_COUNT} MCP tools: code audit, refactoring, DeFi analysis, "
+            f"Solidity scanner, SQL/NL tools, micro-tasks, security, data feeds, "
+            f"composite workflows. Powered by DeepSeek V4 Pro. Payment via x402 USDC or API key credits."
+        ),
         "type": "sse",
         "url": f"{DOMAIN}/mcp/sse",
         "auth": {
             "type": "x402",
-            "description": "Pay per call in USDC via x402 protocol on Base, Arbitrum, Optimism",
+            "description": "Pay per call in USDC via x402 protocol on Base, Arbitrum, Optimism, BNB Chain, Tron. API key credits also supported.",
         },
+        "tools": tools_list,
         "maintainers": [{"email": "admin@agent-api-ai.duckdns.org"}],
         "homepage": DOMAIN,
         "repository": GITHUB,
@@ -442,27 +567,58 @@ async def agent_json():
             "output": info["response"],
         })
 
+    # Add MCP composite skills
+    for ct in _COMPOSITE_MCP_TOOLS:
+        skills.append({
+            "id": ct["name"],
+            "name": ct["name"].replace("-", " ").title(),
+            "description": ct["description"],
+            "tags": [ct["name"], "composite"],
+            "input": ct["input"],
+            "output": ct["output"],
+        })
+
+    # Build tasks list from service catalog
+    tasks = []
+    for path, info in _SVC.items():
+        max_price = info.get("maxPrice", info.get("price", "$0.01"))
+        tasks.append({
+            "id": path.replace("/api/", "").replace("-", "_"),
+            "name": path.replace("/api/", "").replace("-", " ").title(),
+            "description": info["summary"],
+            "category": _service_category(path),
+            "pricing": {
+                "model": info["scheme"],
+                "currency": "USDC",
+                "max": max_price,
+            },
+            "estimatedDuration": "PT10S",
+        })
+
     return JSONResponse({
         "name": "AI Agent API",
         "url": DOMAIN,
         "version": "2.0.0",
+        "did": f"did:web:{DOMAIN.replace('https://', '')}",
         "description": (
-            f"{len(_SVC)} pay-per-call AI services via x402 USDC micropayments. "
+            f"{_REST_COUNT} REST + {_MCP_TOTAL_COUNT} MCP pay-per-call AI services via x402 USDC micropayments. "
             "Code audit, refactoring, DeFi analysis, Solidity scanner, "
-            "SQL/NL tools, micro-tasks, composite workflows. "
+            "AMM security, SQL/NL tools, micro-tasks, composite workflows. "
             "Powered by DeepSeek V4 Pro (1M context)."
         ),
         "capabilities": {
-            "streaming": False,
+            "streaming": True,
             "mcp": True,
             "pushNotifications": False,
+            "extensions": ["x402", "mcp", "a2a"],
+            "tasks": tasks,
         },
         "payments": {
             "version": "2025.0",
             "rails": [
                 {
                     "id": "x402",
-                    "currencies": ["USDC"],
+                    "currencies": ["USDC", "USDT"],
                     "captureTypes": ["immediate_capture", "usage_metered"],
                     "jurisdictions": ["WW"],
                     "policy": f"{DOMAIN}/.well-known/x402",
@@ -484,10 +640,11 @@ async def agent_json():
         "mcp": {
             "endpoint": "/mcp/sse",
             "transport": "sse",
+            "total_tools": _MCP_TOTAL_COUNT,
         },
         "authentication": {
-            "required": False,
-            "schemes": ["x402"],
+            "required": True,
+            "schemes": ["x402", "api_key"],
         },
         "skills": skills,
         "contact": {

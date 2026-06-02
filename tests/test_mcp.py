@@ -24,7 +24,7 @@ MCP_TOOLS = [
 ]
 
 COMPOSITE_SKILLS = [
-    ("defi-research",       "defi_research_tool",       {"protocol": "Aave"}),
+    ("defi-research",       "defi_research_tool",       {"protocol": "Aave", "chain": "ethereum", "onchain_data": "tx: 0x1234"}),
     ("code-health-check",   "code_health_check_tool",   {"code": "def f(): pass"}),
     ("smart-contract-audit","smart_contract_audit_tool",{"code": "contract B {}"}),
     ("data-pipeline",       "data_pipeline_tool",       {"text": "Sample text"}),
@@ -67,13 +67,16 @@ async def test_mcp_tool_invalid_api_key():
 
 @pytest.mark.asyncio
 async def test_mcp_tool_with_api_key_but_zero_balance():
-    """Call with a real but unfunded API key should say 'needs ... credits'."""
-    from app.services.credits import generate_api_key, get_balance
+    """Call with a real but zero-balance API key should say 'needs ... credits'."""
+    from app.services.credits import generate_api_key, get_balance, spend_credits
     from app.mcp_server import validate_json_tool
 
     key = generate_api_key()
-    balance = get_balance(key)
-    assert balance["credits"] == 0
+    # New keys get 50 welcome credits — drain them to test the zero-balance error path
+    # spend_credits deducts cents * 10 credits: 5 cents = 50 credits
+    if get_balance(key)["credits"] > 0:
+        spend_credits(key, get_balance(key)["credits"] // 10)
+    assert get_balance(key)["credits"] == 0
 
     result = await validate_json_tool(
         data="{}", payment_tx="", api_key=key

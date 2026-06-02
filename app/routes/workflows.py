@@ -7,10 +7,14 @@
   POST /api/workflows/register  — register a new composite workflow
 """
 
-from fastapi import APIRouter, Request
+import json as _json
+
+from pydantic import BaseModel, Field, field_validator
+from fastapi import APIRouter, Request, Body, Header as HeaderParam
 from fastapi.responses import JSONResponse
 from app.services import workflow_registry, workflow_analytics, credits
 from app.pricing import AI_UPTO_SERVICES, EXACT_SERVICES
+from app.errors import NotFound, Unauthorized, ValidationFailed
 
 router = APIRouter(prefix="/api/workflows", tags=["workflows"])
 
@@ -20,6 +24,48 @@ _VALID_TOOLS = (
     set(AI_UPTO_SERVICES.keys())
     | set(EXACT_SERVICES.keys())
 )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Pydantic model — schema-first validation for register endpoint
+# ═══════════════════════════════════════════════════════════════════════════
+
+class WorkflowRegisterRequest(BaseModel):
+    """Schema-first validation for POST /api/workflows/register."""
+
+    name: str = Field(..., min_length=1, max_length=100, description="Workflow name")
+    description: str = Field(..., min_length=1, max_length=500, description="Workflow description")
+    chain: list[str] = Field(..., min_length=1, description="Ordered list of tool names")
+    price_cents: int = Field(default=0, ge=0, description="Price in cents (USD)")
+    platform_percent: int = Field(default=15, ge=0, le=100, description="Platform revenue share %")
+    api_key: str = Field(default="", max_length=200, description="API key (or use Authorization header)")
+
+    @field_validator("chain", mode="before")
+    @classmethod
+    def parse_chain(cls, v):
+        """Accept both list and JSON-array string / comma-separated string."""
+        if isinstance(v, list):
+            return v
+        if isinstance(v, str):
+            v = v.strip()
+            if not v:
+                raise ValueError("chain must not be empty")
+            if v.startswith("["):
+                try:
+                    return _json.loads(v)
+                except _json.JSONDecodeError:
+                    pass
+            # Fallback: comma-separated
+            return [t.strip() for t in v.split(",") if t.strip()]
+        raise ValueError("chain must be a list or string")
+
+    @field_validator("name", "description", mode="before")
+    @classmethod
+    def strip_strings(cls, v):
+        """Auto-strip whitespace from string fields."""
+        if isinstance(v, str):
+            return v.strip()
+        return v
 
 
 @router.get("")
@@ -40,7 +86,7 @@ async def get_workflow(workflow_id: str):
     """Get workflow details by ID."""
     wf = workflow_registry.get_workflow(workflow_id)
     if not wf:
-        return JSONResponse(status_code=404, content={"error": "workflow not found"})
+        raise NotFound("Workflow not found")
     # Don't leak author_api_key
     return JSONResponse({
         k: v for k, v in wf.items() if k != "author_api_key"
@@ -52,87 +98,54 @@ async def get_workflow_stats(workflow_id: str):
     """Get 30-day rolling execution stats for a workflow."""
     wf = workflow_registry.get_workflow(workflow_id)
     if not wf:
-        return JSONResponse(status_code=404, content={"error": "workflow not found"})
+        raise NotFound("Workflow not found")
     stats = workflow_analytics.get_workflow_stats(workflow_id)
     stats["workflow_name"] = wf["name"]
     return JSONResponse(stats)
 
 
 @router.post("/register")
-async def register_workflow(request: Request):
-    """Register a new composite workflow. Requires API key (Authorization header)."""
-    import json as _json
-
-    # Parse body — accept both JSON and form-encoded
-    content_type = request.headers.get("content-type", "")
-    if "application/json" in content_type:
-        body = await request.json()
-    else:
-        form = await request.form()
-        body = {k: v for k, v in form.items()}
-
-    api_key = body.get("api_key", "")
-    if not api_key:
-        auth = request.headers.get("Authorization", "")
-        if auth.startswith("Bearer ak-"):
-            api_key = auth[7:]
+async def register_workflow(
+    request: Request,
+    body: WorkflowRegisterRequest = Body(..., description="Workflow registration payload"),
+    authorization: str = HeaderParam(default="", alias="Authorization", description="Bearer ak-..."),
+):
+    """Register a new composite workflow. Requires API key (Authorization header or body)."""
+    # Resolve API key: prefer Authorization header, fallback to body field
+    api_key = ""
+    if authorization.startswith("Bearer ak-"):
+        api_key = authorization[7:]
+    elif body.api_key:
+        api_key = body.api_key
 
     if not api_key:
-        return JSONResponse(status_code=401, content={"error": "API key required. Provide api_key in body or Authorization: Bearer ak-..."})
+        raise Unauthorized("API key required. Provide api_key in body or Authorization: Bearer ak-...")
 
     balance = credits.get_balance(api_key)
     if not balance:
-        return JSONResponse(status_code=401, content={"error": "invalid API key"})
-
-    name = body.get("name", "").strip()
-    description = body.get("description", "").strip()
-    chain_raw = body.get("chain", [])
-    price_cents = body.get("price_cents", 0)
-    platform_percent = body.get("platform_percent", 15)
-
-    # Validate
-    if not name or len(name) > 100:
-        return JSONResponse(status_code=400, content={"error": "name is required (max 100 chars)"})
-    if not description or len(description) > 500:
-        return JSONResponse(status_code=400, content={"error": "description is required (max 500 chars)"})
-    if not chain_raw:
-        return JSONResponse(status_code=400, content={"error": "chain is required (list of tool names)"})
-
-    # Parse chain — accept JSON array string or list
-    if isinstance(chain_raw, str):
-        try:
-            chain = _json.loads(chain_raw)
-        except _json.JSONDecodeError:
-            chain = [t.strip() for t in chain_raw.split(",") if t.strip()]
-    else:
-        chain = chain_raw
+        raise Unauthorized("Invalid API key")
 
     # Validate chain tools
-    unknown = [t for t in chain if t not in _VALID_TOOLS]
+    unknown = [t for t in body.chain if t not in _VALID_TOOLS]
     if unknown:
-        return JSONResponse(status_code=400, content={
-            "error": f"Unknown tools: {', '.join(unknown)}",
-            "valid_tools": sorted(_VALID_TOOLS),
-        })
-
-    try:
-        price_cents = int(price_cents)
-        platform_percent = int(platform_percent)
-    except (ValueError, TypeError):
-        return JSONResponse(status_code=400, content={"error": "price_cents and platform_percent must be integers"})
+        raise ValidationFailed(
+            f"Unknown tools: {', '.join(unknown)}. Valid: {', '.join(sorted(_VALID_TOOLS))}"
+        )
 
     try:
         wf = workflow_registry.register_workflow(
-            name=name,
-            description=description,
+            name=body.name,
+            description=body.description,
             author_api_key=api_key,
-            chain=chain,
-            price_cents=price_cents,
-            platform_percent=platform_percent,
+            chain=body.chain,
+            price_cents=body.price_cents,
+            platform_percent=body.platform_percent,
         )
     except ValueError as e:
-        return JSONResponse(status_code=400, content={"error": str(e)})
+        raise ValidationFailed(str(e))
 
+    price_cents = body.price_cents
+    platform_percent = body.platform_percent
     author_share = price_cents * (100 - platform_percent) // 100
 
     return JSONResponse({

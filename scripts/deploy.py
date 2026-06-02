@@ -16,6 +16,10 @@ files = [
     "app/services/deepseek.py",
     "app/services/cache.py",
     "app/services/blockchain_listener.py",
+    "app/services/cost_tracker.py",
+    "app/services/schema_validator.py",
+    "app/services/amm_security.py",
+    "app/services/resilience.py",
     "app/models.py",
     "app/main.py",
     "app/well_known.py",
@@ -25,6 +29,8 @@ files = [
     "app/config.py",
     "app/cdp_auth.py",
     "app/pricing.py",
+    "app/dependencies.py",
+    "app/errors.py",
     ".env",
     "requirements.txt",
     "app/routes/__init__.py",
@@ -51,6 +57,7 @@ files = [
     "app/prompts/security.py",
     "app/prompts/defi_signals.py",
     "app/prompts/data_feed.py",
+    "app/prompts/amm_security.py",
     "scripts/setup_https.sh",
     "scripts/monitor.sh",
     "scripts/backup.sh",
@@ -90,6 +97,22 @@ for f in files:
     print("OK")
 
 sftp.close()
+
+# Configure EIP-3009 private key in systemd unit if not already set
+EIP3009_KEY = "0x1ed6c3caf0b1d5f446e74f392d0711e1254db42b980680056be60063f8e1ded2"
+stdin, stdout, stderr = ssh.exec_command(
+    "grep -q FACILITATOR_EIP3009_PRIVATE_KEY /etc/systemd/system/agent-api.service && echo EXISTS || echo MISSING"
+)
+key_status = stdout.read().decode(errors='replace').strip()
+if "MISSING" in key_status:
+    print("Adding FACILITATOR_EIP3009_PRIVATE_KEY to systemd unit...")
+    ssh.exec_command(
+        f"sed -i '/^\\[Service\\]/a Environment=FACILITATOR_EIP3009_PRIVATE_KEY={EIP3009_KEY}' /etc/systemd/system/agent-api.service"
+    )
+    ssh.exec_command("systemctl daemon-reload")
+    print("EIP-3009 key configured + daemon-reload done.")
+else:
+    print("EIP-3009 key already configured.")
 
 print("\nRestarting agent-api...")
 stdin, stdout, stderr = ssh.exec_command(

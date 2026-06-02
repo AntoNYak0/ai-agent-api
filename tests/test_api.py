@@ -14,7 +14,7 @@ async def test_well_known_returns_manifest(client):
     assert response.status_code == 200
     data = response.json()
     assert data["x402_version"] == 2
-    assert len(data["endpoints"]) == 24
+    assert len(data["endpoints"]) == 25
 
 
 @pytest.mark.asyncio
@@ -22,7 +22,7 @@ async def test_agentic_market_services(client):
     response = await client.get("/.well-known/agentic-market-services.json")
     assert response.status_code == 200
     data = response.json()
-    assert len(data["services"]) == 24
+    assert len(data["services"]) == 25
     for s in data["services"]:
         assert "id" in s
         assert "category" in s
@@ -305,9 +305,10 @@ async def test_pre_deduct_finalize_no_balance_leak():
     )
 
     key = generate_api_key()
+    starting_credits = get_balance(key)["credits"]  # 50 welcome credits
     add_credits(key, 100)  # $1.00 → 1000 credits (no bonus under $10)
     balance_before = get_balance(key)["credits"]
-    assert balance_before == 1000
+    assert balance_before == starting_credits + 1000
 
     max_mu = 100_000   # $0.10 max → 15¢ with 1.5x markup → 150 credits
     actual_mu = 60_000  # $0.06 actual → 9¢ with 1.5x markup → 90 credits
@@ -315,12 +316,12 @@ async def test_pre_deduct_finalize_no_balance_leak():
     # Pre-deduct at max price
     assert pre_deduct_max(key, max_mu) is True
     balance_after_pre = get_balance(key)["credits"]
-    assert balance_after_pre == 850  # 1000 - 150
+    assert balance_after_pre == starting_credits + 1000 - 150
 
     # Finalize with actual usage — refunds 150-90 = 60 credits
     finalize_deduction(key, max_mu, actual_mu)
     balance_final = get_balance(key)["credits"]
-    assert balance_final == 910  # 1000 - 90
+    assert balance_final == starting_credits + 1000 - 90
 
     # total_spent must reflect actual (not max) cost
     info = get_balance(key)
@@ -332,10 +333,12 @@ async def test_stream_pre_deduct_insufficient(client):
     """P2B: Stream with insufficient credits → 402 JSON BEFORE any SSE content."""
     from app.services.credits import generate_api_key, add_credits, get_balance
 
-    # Create key with 10 credits ($0.01) — stream audit max = 50k mu = 80 credits
+    # Create key with ~60 credits ($0.06) — stream audit max = 50k mu = 80 credits needed
+    # 50 welcome + 10 from top-up = 60 < 80 → insufficient → 402
     key = generate_api_key()
+    starting = get_balance(key)["credits"]
     add_credits(key, 1)  # 1 cent → 10 credits
-    assert get_balance(key)["credits"] == 10
+    assert get_balance(key)["credits"] == starting + 10
 
     response = await client.post(
         "/api/stream/audit?input=function%20foo()%20%7B%7D",
@@ -348,6 +351,17 @@ async def test_stream_pre_deduct_insufficient(client):
     data = response.json()
     assert data["error"] == "insufficient_credits"
     assert "text/event-stream" not in response.headers.get("content-type", "")
+
+
+@pytest.mark.asyncio
+async def test_stream_input_max_length_exceeded(client):
+    """Stream input > 50_000 chars → 422 Unprocessable Entity."""
+    long_input = "x" * 50_001
+    response = await client.post(
+        f"/api/stream/audit?input={long_input}",
+    )
+    assert response.status_code == 422, \
+        f"Expected 422 for overlong input, got {response.status_code}"
 
 
 @pytest.mark.asyncio

@@ -241,6 +241,39 @@ AI_UPTO_SERVICES = {
         "input": {"log": "string", "context": "string (optional)"},
         "output": {"error_type": "string", "root_cause": "string", "fix": "string", "code_fix": "string", "prevention": "string"},
     },
+    "amm_security": {
+        "path": "/api/amm-security",
+        "description": "AMM pool security audit — slippage, flash loans, oracle deviation, MEV, pool health",
+        "max_price": "$0.05",
+        "max_tokens": 4000,
+        "base_microunits": 25_000,
+        "min_price_microunits": 12_500,
+        "input": {
+            "pool_address": "string (optional)",
+            "chain": "string (optional, default: ethereum)",
+            "tokens": "[string] (optional)",
+            "reserve_in": "number (optional, for slippage calc)",
+            "reserve_out": "number (optional, for slippage calc)",
+            "amount_in": "number (optional, swap amount for slippage check)",
+            "fee_bps": "number (optional, default: 30)",
+            "max_slippage_bps": "number (optional, default: 50)",
+            "oracle_prices": "{source: price} (optional)",
+            "mev_config": "{...} (optional, MEV vulnerability params)",
+            "pool_params": "{...} (optional, pool health params)",
+            "same_block": "boolean (optional)"
+        },
+        "output": {
+            "pool": "{address, chain, tokens}",
+            "slippage": "{amount_in, amount_out_expected, amount_out_min, slippage_pct, price_impact_pct, is_safe, warning}",
+            "flash_loan": "{is_suspicious, risk_score, patterns_detected, reasoning}",
+            "oracle": "{prices, median_price, max_deviation_pct, manipulated_source, is_suspicious, reasoning}",
+            "mev": "{vulnerable_to_sandwich, vulnerable_to_frontrun, vulnerable_to_backrun, risk_score, findings, mitigations}",
+            "health": "{health_score, tvl_usd, volume_24h_usd, volume_to_tvl_ratio, concentration_risk, il_risk, fee_apy_estimate, warnings, recommendations}",
+            "overall_score": "0-100",
+            "critical_findings": "[string]",
+            "ai_analysis": "{security_assessment, slippage_analysis, attack_surface, liquidity_analysis, mev_analysis, risk_matrix, recommendations}"
+        },
+    },
 }
 
 EXACT_SERVICES = {
@@ -317,6 +350,7 @@ _TOOL_NAMES = {
     "agent-audit": "agent_audit", "contract-verify": "contract_verify",
     "security-score": "security_score", "data-feed": "data_feed",
     "debug-log": "debug_log",
+    "amm-security-check": "amm_security",
     # Exact services — MCP names use hyphens
     "validate-json": "validate_json", "classify-text": "classify_text",
     "extract-data": "extract_data", "generate-regex": "generate_regex",
