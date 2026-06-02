@@ -2,6 +2,9 @@
 
 Runs as a background asyncio task. Checks for new Transfer events to the wallet,
 matches sender address to registered API keys, and auto-top-ups credits.
+
+Resilience: each RPC call uses async_retry (exponential backoff + jitter) and
+per-chain circuit breakers (evm-rpc-{network}) — same as facilitator.py.
 """
 import asyncio
 import logging
@@ -12,7 +15,9 @@ import threading
 
 import httpx
 
+from app.config import settings
 from app.pricing import WALLET, round_up_cents
+from app.services.resilience import get_circuit_breaker, async_retry, CircuitBreakerOpen
 
 logger = logging.getLogger("blockchain_listener")
 
@@ -20,7 +25,7 @@ logger = logging.getLogger("blockchain_listener")
 RPC_URLS = {
     "eip155:8453": "https://mainnet.base.org",
     "eip155:42161": "https://arb1.arbitrum.io/rpc",
-    "eip155:10": "https://mainnet.optimism.io",
+    "eip155:10": "https://optimism.drpc.org",
 }
 USDC_CONTRACTS = {
     "eip155:8453": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
@@ -69,8 +74,12 @@ def _save_wallet_keys() -> None:
         json.dump(_wallet_keys, f)
 
 
-async def _get_logs(rpc_url: str, contract: str, from_block: int) -> list:
-    """Fetch Transfer events to our wallet since from_block."""
+async def _get_logs(rpc_url: str, contract: str, from_block: int, network: str = "") -> list:
+    """Fetch Transfer events to our wallet since from_block.
+
+    Uses async_retry with exponential backoff + jitter, and per-chain
+    circuit breaker (evm-rpc-{network}) — same resilience pattern as facilitator.py.
+    """
     topic_filter = (
         f"0x{'0' * 24}{WALLET[2:].lower()}"  # pad to 32 bytes
     )
@@ -85,15 +94,53 @@ async def _get_logs(rpc_url: str, contract: str, from_block: int) -> list:
         }],
         "id": 1,
     }
-    try:
+
+    cb = get_circuit_breaker(f"evm-rpc-{network}") if network else None
+
+    async def _rpc_call() -> list:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.post(rpc_url, json=payload)
             if resp.status_code == 200:
                 data = resp.json()
-                return data.get("result", [])
-    except Exception as e:
-        logger.debug("RPC %s: %s", rpc_url, e)
-    return []
+                if "error" in data:
+                    err = data["error"]
+                    raise RuntimeError(
+                        f"RPC {rpc_url}: {err.get('message', str(err))}"
+                    )
+                result = data.get("result", [])
+                if result is None:
+                    # Some RPCs return {"result": null} for no logs
+                    return []
+                return result
+            # Include response body in error for diagnostics
+            body = resp.text[:200]
+            raise RuntimeError(f"RPC {rpc_url}: HTTP {resp.status_code} — {body}")
+
+    try:
+        if cb:
+            cb.before_call()
+    except CircuitBreakerOpen:
+        logger.warning("Circuit breaker open for %s — skipping RPC call", f"evm-rpc-{network}")
+        return []
+
+    try:
+        result = await async_retry(
+            _rpc_call,
+            max_retries=settings.retry_max_attempts,
+            base_delay=settings.retry_base_delay,
+            max_delay=settings.retry_max_delay,
+            jitter=settings.retry_jitter_enabled,
+            max_cumulative_timeout=30.0,
+            retryable_exceptions=(RuntimeError,),
+        )
+        if cb:
+            cb.on_success()
+        return result
+    except (RuntimeError, TimeoutError) as e:
+        if cb:
+            cb.on_failure()
+        logger.warning("RPC %s (network=%s): %s", rpc_url[:40], network, e)
+        return []
 
 
 def _parse_transfer(log: dict) -> tuple[str, int] | None:
@@ -107,6 +154,46 @@ def _parse_transfer(log: dict) -> tuple[str, int] | None:
         return None
 
 
+async def _get_current_block(rpc_url: str, network: str) -> int | None:
+    """Fetch current block number from RPC. Returns None on failure."""
+    cb = get_circuit_breaker(f"evm-rpc-{network}")
+    try:
+        cb.before_call()
+    except CircuitBreakerOpen:
+        logger.warning("Circuit breaker open — skipping block number check for %s", network)
+        return None
+
+    async def _call(url: str) -> int:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(url, json={
+                "jsonrpc": "2.0", "method": "eth_blockNumber", "params": [], "id": 1,
+            })
+            if resp.status_code == 200:
+                return int(resp.json()["result"], 16)
+            raise RuntimeError(f"HTTP {resp.status_code}")
+
+    try:
+        current = await async_retry(
+            _call, rpc_url,
+            max_retries=settings.rpc_retry_max_attempts,
+            base_delay=0.5, max_delay=5.0,
+            jitter=settings.retry_jitter_enabled,
+            max_cumulative_timeout=15.0,
+            retryable_exceptions=(RuntimeError,),
+        )
+        if current is not None:
+            cb.on_success()
+        return current
+    except (RuntimeError, TimeoutError) as e:
+        cb.on_failure()
+        logger.warning("Failed to get block number for %s: %s", network, e)
+        return None
+
+
+# Public RPCs (mainnet.base.org etc.) limit eth_getLogs to 10,000 block range
+MAX_BLOCK_RANGE = 9_900
+
+
 async def _poll_once() -> int:
     """Check all chains for new transfers. Returns number of new transfers processed."""
     from app.services.credits import add_credits
@@ -118,30 +205,37 @@ async def _poll_once() -> int:
             last_blocks = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         last_blocks = {}
-        # First run: start from 1000 blocks ago instead of block 0
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                for network, rpc_url in RPC_URLS.items():
-                    resp = await client.post(rpc_url, json={"jsonrpc": "2.0", "method": "eth_blockNumber", "params": [], "id": 1})
-                    if resp.status_code == 200:
-                        current = int(resp.json()["result"], 16)
-                        last_blocks[network] = max(0, current - 1000)
-                        logger.info("Listener starting from block %d on %s", last_blocks[network], network)
-        except Exception:
-            pass
 
     total_processed = 0
 
     for network, rpc_url in RPC_URLS.items():
         contract = USDC_CONTRACTS[network]
-        from_block = last_blocks.get(network, 0) + 1
+        stored_block = last_blocks.get(network, 0)
 
-        logs = await _get_logs(rpc_url, contract, from_block)
-        if not logs:
+        # Get current block to bound the query range
+        current = await _get_current_block(rpc_url, network)
+        if current is None:
+            # RPC unavailable — skip this chain, try again next poll
             continue
 
-        max_block = max(int(log.get("blockNumber", "0x0"), 16) for log in logs)
-        last_blocks[network] = max_block
+        # Initialize or reset if too far behind (> MAX_BLOCK_RANGE blocks)
+        if stored_block == 0 or (current - stored_block) > MAX_BLOCK_RANGE:
+            last_blocks[network] = max(0, current - MAX_BLOCK_RANGE)
+            logger.info(
+                "Listener block init/reset on %s: %d -> %d (current=%d)",
+                network, stored_block, last_blocks[network], current,
+            )
+
+        from_block = last_blocks[network] + 1
+
+        logs = await _get_logs(rpc_url, contract, from_block, network=network)
+        if logs:
+            max_block = max(int(log.get("blockNumber", "0x0"), 16) for log in logs)
+            last_blocks[network] = max_block
+        else:
+            # No logs found — advance last_block to current so the range
+            # doesn't grow unboundedly and hit the 10k-block RPC limit.
+            last_blocks[network] = current
 
         for log in logs:
             tx_hash = log.get("transactionHash", "")
@@ -177,8 +271,8 @@ async def _poll_once() -> int:
         os.makedirs(os.path.dirname(LAST_BLOCK_FILE) or ".", exist_ok=True)
         with open(LAST_BLOCK_FILE, "w") as f:
             json.dump(last_blocks, f)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Failed to save last block file: %s", e)
 
     return total_processed
 

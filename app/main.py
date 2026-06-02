@@ -1,7 +1,11 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, HTMLResponse
+
 from app.config import settings
+from app.errors import ApiError, register_exception_handlers
 from app.x402_setup import configure_x402
 from app.routes import audit, refactor, docs, defi, trading, micro, billing, solidity_scan, stream, defi_signals, security, data_feed, workflows
 from app.well_known import router as well_known_router
@@ -10,6 +14,7 @@ from app.pricing import ALL_SERVICES, COMPOSITE_SKILLS, NETWORKS, WALLET
 from app.services import credits, rate_limiter, analytics
 from app.services import replay_guard
 from app.services.deepseek import get_injection_stats
+from app.services.resilience import get_all_circuit_breakers
 
 # ---------------------------------------------------------------------------
 # File logging — production: /opt/agent-api/logs/app.log  (10 MB rotated, 5 backups)
@@ -40,10 +45,63 @@ logging.getLogger().addHandler(_handler)
 logging.getLogger().setLevel(logging.INFO)
 logging.getLogger("uvicorn.access").addHandler(_handler)
 
+@asynccontextmanager
+async def _lifespan(application: FastAPI):
+    """Async startup/shutdown — modern FastAPI lifespan pattern.
+
+    Replaces deprecated @app.on_event("startup").
+    Pattern from ECC fastapi-patterns: use lifespan instead of on_event hooks.
+    """
+    import asyncio
+    from app.services.blockchain_listener import start_listener
+
+    # Startup
+    asyncio.create_task(start_listener())
+    yield
+    # Shutdown (cleanup goes here if needed)
+
+
 app = FastAPI(
     title="AI Agent API",
-    description="Paid AI services: code audit, refactoring, docs, DeFi analysis, trading, Solidity scanner, SQL tools. Payment via x402 (USDC) or API key (credits).",
-    version="2.0.0",
+    description=(
+        "**29 MCP tools + 24 REST services** — pay-per-call AI for autonomous agents and developers.\n\n"
+        "### 💰 Pricing\n"
+        "- **Micro-tasks**: $0.001–$0.005 (validate, classify, extract, regex, format, summarize)\n"
+        "- **AI upto-services**: $0.005–$1.00 (audit, refactor, docs, DeFi, Solidity, SQL, trading)\n"
+        "- **Composite skills**: $0.05–$0.10 (defi-research, code-health, smart-contract-audit, data-pipeline)\n\n"
+        "### 🔑 Authentication\n"
+        "- **x402 (crypto)**: Pay per call in USDC on Base/Arbitrum/Optimism/BNB Chain — no API key needed\n"
+        "- **API Key (credits)**: Get 50 free credits at `POST /billing/create-key`. "
+        "1 credit = $0.001. Top up with USDC — auto-credited within 60s.\n\n"
+        "### 📡 MCP\n"
+        "SSE endpoint at `/mcp/sse` — compatible with Claude Desktop, Cursor, and other MCP clients."
+    ),
+    version="2.1.0",
+    lifespan=_lifespan,
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
+    swagger_ui_parameters={
+        "defaultModelsExpandDepth": -1,  # Hide schemas by default
+        "displayRequestDuration": True,
+        "tryItOutEnabled": True,
+    },
+    contact={
+        "email": "admin@agent-api-ai.duckdns.org",
+    },
+    license_info={
+        "name": "MIT",
+        "url": "https://github.com/AntoNYak0/ai-agent-api/blob/master/LICENSE",
+    },
+    openapi_tags=[
+        {"name": "billing", "description": "API key management, credits, top-up, analytics"},
+        {"name": "health", "description": "Health checks, metrics, security status"},
+        {"name": "well-known", "description": "Service discovery — x402 manifest, OpenAPI spec, agent cards"},
+        {"name": "stream", "description": "SSE streaming endpoints — token-by-token AI responses"},
+        {"name": "workflows", "description": "Composite workflow CRUD and execution"},
+        {"name": "micro", "description": "Micro-tasks — $0.001–$0.005 (validate, classify, extract, regex, format, summarize)"},
+        {"name": "ai-services", "description": "AI upto-services — $0.005–$1.00 (audit, refactor, docs, DeFi, Solidity, SQL, trading, security, signals)"},
+    ],
 )
 
 # CORS — restricted to known origins
@@ -52,8 +110,30 @@ app.add_middleware(
     allow_origins=["https://agent-api-ai.duckdns.org", "http://localhost:8000"],
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "payment-signature", "X-Forwarded-For"],
-    expose_headers=["PAYMENT-REQUIRED", "PAYMENT-RESPONSE", "X-PAYMENT-RESPONSE"],
+    expose_headers=["PAYMENT-REQUIRED", "PAYMENT-RESPONSE", "X-PAYMENT-RESPONSE", "WWW-Authenticate"],
 )
+
+# Centralized error handlers — one place for all API error → JSON mapping
+register_exception_handlers(app)
+
+# DeepSeekError → 503 (kept as dedicated handler for ServiceUnavailable)
+from app.services.deepseek import DeepSeekError
+from app.errors import ServiceUnavailable
+
+
+@app.exception_handler(DeepSeekError)
+async def deepseek_error_handler(request: Request, exc: DeepSeekError):
+    """Return 503 when AI backend is down — don't leak stack traces."""
+    logging.getLogger("main").error("DeepSeek unavailable: %s", exc)
+    api_err = ServiceUnavailable(
+        "AI backend is temporarily unavailable. Please retry in a few seconds.",
+        retry_after_seconds=30,
+    )
+    return JSONResponse(
+        status_code=api_err.status_code,
+        content=api_err.to_response(),
+        headers={"Retry-After": "30"},
+    )
 
 configure_x402(
     app=app,
@@ -95,23 +175,6 @@ async def api_versioning_middleware(request: Request, call_next):
         response.headers["X-API-Version"] = "use /api/v1/ instead"
     return response
 
-from app.services.deepseek import DeepSeekError
-
-
-@app.exception_handler(DeepSeekError)
-async def deepseek_error_handler(request: Request, exc: DeepSeekError):
-    """Return 503 when AI backend is down — don't leak stack traces."""
-    logging.getLogger("main").error("DeepSeek unavailable: %s", exc)
-    return JSONResponse(
-        status_code=503,
-        content={
-            "error": "service_unavailable",
-            "message": "AI backend is temporarily unavailable. Please retry in a few seconds.",
-            "retry_after_seconds": 30,
-        },
-        headers={"Retry-After": "30"},
-    )
-
 app.include_router(audit.router)
 app.include_router(refactor.router)
 app.include_router(docs.router)
@@ -126,13 +189,6 @@ app.include_router(stream.router)
 app.include_router(well_known_router)
 app.include_router(billing.router)
 app.include_router(workflows.router)
-
-# Start blockchain listener for auto-top-up on startup
-@app.on_event("startup")
-async def startup_blockchain_listener():
-    import asyncio
-    from app.services.blockchain_listener import start_listener
-    asyncio.create_task(start_listener())
 
 # Mount MCP server at /mcp — other AI agents connect here
 app.mount("/mcp", mcp_app.sse_app())
@@ -214,14 +270,21 @@ a {{ color:#58a6ff }}
 </div>
 
 <div class="card">
-<h2>Quick Start — Free Trial</h2>
-<code>curl https://agent-api-ai.duckdns.org/api/validate-json -H "Content-Type: application/json" -d '{{"data":"{{\\"name\\":\\"test\\"}}"}}'</code>
-<p style="margin-top:8px;color:#8b949e;font-size:12px">validate-json requires x402 USDC payment ($0.001) or API key credits. All 24 endpoints are pay-per-call.</p>
+<h2>Quick Start — 50 Free Credits ($0.05)</h2>
+<code>curl -X POST https://agent-api-ai.duckdns.org/billing/create-key</code>
+<p style="margin-top:8px;color:#3fb950;font-size:12px"><strong>New keys get 50 free credits</strong> — enough for 10-50 test API calls. No payment required.</p>
+<pre style="margin-top:8px;background:#0d1117;padding:10px;border-radius:4px;font-size:12px;color:#c9d1d9">
+# Try a micro-task (1 credit = $0.001):
+curl -X POST https://agent-api-ai.duckdns.org/api/validate-json \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer ak-YOUR_KEY" \
+  -d '{{"data":"simple test"}}'
+# HTTP 200 (JSON result)</pre>
 </div>
 
 <div class="card">
-<h2>Get API Key — Pay with Crypto</h2>
-<p style="color:#8b949e;margin-bottom:12px">Send USDC to the address below, then contact to top up your key. 1 credit = $0.001.</p>
+<h2>💰 Top Up with Crypto — Auto-Credit in 60s</h2>
+<p style="color:#8b949e;margin-bottom:12px">1. <a href="/billing/register-wallet" style="color:#58a6ff">Register your wallet</a> · 2. Send USDC · 3. Credits appear automatically — <strong style="color:#3fb950">no manual confirmation needed</strong>.</p>
 <div style="background:#0d1117;border-radius:6px;padding:14px;margin-bottom:12px;display:flex;align-items:center;gap:14px">
 <div style="flex:1">
 <div style="font-size:12px;color:#8b949e;margin-bottom:4px">USDC (Base / Arbitrum / Optimism / BNB Chain)</div>
@@ -238,11 +301,12 @@ a {{ color:#58a6ff }}
 </div>
 <table>
 <tr><th>Tier</th><th>Price</th><th>Credits</th><th>Bonus</th></tr>
-<tr><td>Starter</td><td>$10</td><td>10,000</td><td>—</td></tr>
-<tr><td>Pro</td><td>$45</td><td>50,000</td><td>10% extra</td></tr>
-<tr><td>Scale</td><td>$80</td><td>100,000</td><td>20% extra</td></tr>
+<tr><td>Starter</td><td>$1</td><td>1,000</td><td>—</td></tr>
+<tr><td>Pro</td><td>$10</td><td>11,000</td><td>10% bonus</td></tr>
+<tr><td>Scale</td><td>$50</td><td>60,000</td><td>20% bonus</td></tr>
+<tr><td>Enterprise</td><td>$100</td><td>130,000</td><td>30% bonus</td></tr>
 </table>
-<p style="margin-top:8px;color:#8b949e;font-size:12px"><a href="/billing/create-key" style="color:#58a6ff">Create free trial key</a> (1000 credits, no payment required).</p>
+<p style="margin-top:8px;color:#8b949e;font-size:12px"><a href="/billing/create-key" style="color:#58a6ff">Create key with 50 free credits</a>. After trial: send USDC from registered wallet → auto-top-up in 60s. <a href="/billing/tiers" style="color:#58a6ff">Bulk discounts</a> up to 30% bonus.</p>
 </div>
 
 <div class="card">
@@ -262,6 +326,110 @@ Powered by DeepSeek V4 Pro · Payments via x402 Protocol · {rl['tracked_ips']} 
 </p>
 </body>
 </html>""")
+
+
+@app.get("/topup", response_class=HTMLResponse)
+async def topup_page():
+    """Dedicated top-up page with QR codes, calculator, and network info."""
+    return HTMLResponse("""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Top Up — AI Agent API</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box }
+body { font:14px/1.5 -apple-system,BlinkMacSystemFont,sans-serif; background:#0d1117; color:#c9d1d9; padding:40px 20px; max-width:800px; margin:0 auto }
+h1 { font-size:24px; margin-bottom:4px; color:#f0f6fc }
+p.sub { color:#8b949e; margin-bottom:24px }
+.card { background:#161b22; border:1px solid #30363d; border-radius:8px; padding:20px; margin-bottom:16px }
+h2 { font-size:16px; margin-bottom:12px; color:#f0f6fc; border-bottom:1px solid #30363d; padding-bottom:8px }
+.row { display:flex; gap:12px; flex-wrap:wrap }
+.col { flex:1; min-width:280px }
+code { background:#0d1117; padding:2px 6px; border-radius:4px; font-size:12px; color:#d2a8ff; word-break:break-all }
+a { color:#58a6ff }
+.qr-box { background:#0d1117; border-radius:8px; padding:20px; text-align:center }
+.qr-box img { width:160px; height:160px; border-radius:8px }
+.step { background:#0d1117; border-radius:6px; padding:14px; margin-bottom:8px; display:flex; gap:12px; align-items:flex-start }
+.step-num { background:#238636; color:#fff; border-radius:50%; width:24px; height:24px; display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:700; flex-shrink:0 }
+.calc-box { background:#0d1117; border-radius:8px; padding:20px; margin-bottom:16px }
+.calc-box input { width:100%; padding:10px; border-radius:6px; border:1px solid #30363d; background:#161b22; color:#c9d1d9; font-size:16px; margin-bottom:8px }
+.calc-box .result { font-size:20px; font-weight:700; color:#3fb950 }
+table { width:100%; border-collapse:collapse; margin-top:8px }
+th, td { text-align:left; padding:8px 12px; border-bottom:1px solid #30363d }
+th { color:#8b949e; font-weight:500; font-size:11px; text-transform:uppercase }
+.bonus-tag { background:#1f6feb; color:#fff; padding:2px 8px; border-radius:10px; font-size:11px }
+</style>
+</head>
+<body>
+<h1>💰 Top Up Your Account</h1>
+<p class="sub">Send USDC → get credits automatically in ~60 seconds. No manual steps.</p>
+
+<div class="card">
+<h2>Step-by-Step</h2>
+<div class="step"><div class="step-num">1</div><div>Create an API key: <code>curl -X POST https://agent-api-ai.duckdns.org/billing/create-key</code><br><span style="color:#3fb950;font-size:12px">50 free credits included ($0.05) — try before you buy</span></div></div>
+<div class="step"><div class="step-num">2</div><div>Register your wallet: <code>curl -X POST https://agent-api-ai.duckdns.org/billing/register-wallet -d '{{"api_key":"ak-YOUR_KEY","wallet":"0xYOUR_ADDRESS"}}'</code></div></div>
+<div class="step"><div class="step-num">3</div><div>Send USDC from your registered wallet to the address below</div></div>
+<div class="step"><div class="step-num">4</div><div>Credits appear automatically — check: <code>curl "https://agent-api-ai.duckdns.org/billing/balance?key=ak-YOUR_KEY"</code></div></div>
+</div>
+
+<div class="row">
+<div class="col">
+<div class="card">
+<h2>EVM (USDC)</h2>
+<div class="qr-box"><img src="https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=0xdE7eb04faE758055642f67f30D246CcB7136C95E" alt="USDC QR"><br><code>0xdE7eb04faE758055642f67f30D246CcB7136C95E</code></div>
+<p style="margin-top:12px;color:#8b949e;font-size:12px">Networks: Base · Arbitrum · Optimism · BNB Chain<br>Token: USDC (6 decimals)</p>
+</div>
+</div>
+<div class="col">
+<div class="card">
+<h2>Tron (USDT TRC-20)</h2>
+<div class="qr-box"><img src="https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=TADavZEHddjYMQcL2cnaFadFVKAUmP9wMw" alt="USDT QR"><br><code>TADavZEHddjYMQcL2cnaFadFVKAUmP9wMw</code></div>
+<p style="margin-top:12px;color:#8b949e;font-size:12px">Network: Tron (TRC-20)<br>Token: USDT (6 decimals)</p>
+</div>
+</div>
+</div>
+
+<div class="card">
+<h2>🧮 Credit Calculator</h2>
+<div class="calc-box">
+<label style="color:#8b949e;font-size:12px">Amount in USDC:</label>
+<input type="number" id="usd" value="10" min="1" max="100" step="1" oninput="calc()">
+<div style="margin-top:8px">You get: <span class="result" id="credits">11,000</span> credits</div>
+<div style="color:#8b949e;font-size:12px;margin-top:4px">Enough for ~<span id="calls">2,200</span> micro-task calls or <span id="audits">220</span> audit scans</div>
+</div>
+<script>
+function calc() {
+  const usd = parseInt(document.getElementById('usd').value) || 0;
+  let bonus = 0;
+  if (usd >= 100) bonus = 0.30;
+  else if (usd >= 50) bonus = 0.20;
+  else if (usd >= 10) bonus = 0.10;
+  const credits = Math.floor(usd * 1000 * (1 + bonus));
+  document.getElementById('credits').textContent = credits.toLocaleString();
+  document.getElementById('calls').textContent = Math.floor(credits / 5).toLocaleString();
+  document.getElementById('audits').textContent = Math.floor(credits / 50).toLocaleString();
+}
+calc();
+</script>
+</div>
+
+<div class="card">
+<h2>Bulk Discount Tiers</h2>
+<table>
+<tr><th>Tier</th><th>Amount</th><th>Credits</th><th>Bonus</th></tr>
+<tr><td>Starter</td><td>$1</td><td>1,000</td><td>—</td></tr>
+<tr><td>Pro</td><td>$10</td><td>11,000</td><td><span class="bonus-tag">+10%</span></td></tr>
+<tr><td>Scale</td><td>$50</td><td>60,000</td><td><span class="bonus-tag">+20%</span></td></tr>
+<tr><td>Enterprise</td><td>$100</td><td>130,000</td><td><span class="bonus-tag">+30%</span></td></tr>
+</table>
+<p style="margin-top:12px;color:#8b949e;font-size:12px">Credits never expire. 1 credit = $0.001. 1 credit = 1 micro-task call.</p>
+</div>
+
+<p style="text-align:center;color:#8b949e;font-size:11px;margin-top:20px">
+<a href="/">Dashboard</a> · <a href="/docs">API Docs</a> · <a href="/billing/tiers">Billing API</a> · <a href="https://github.com/AntoNYak0/ai-agent-api">GitHub</a>
+</p>
+</body></html>""")
 
 
 @app.get("/favicon.svg")
@@ -439,7 +607,7 @@ async def health_deep():
     rpcs = {
         "base": "https://mainnet.base.org",
         "arbitrum": "https://arb1.arbitrum.io/rpc",
-        "optimism": "https://mainnet.optimism.io",
+        "optimism": "https://optimism.drpc.org",
         "bsc": "https://bsc-dataseed1.binance.org",
     }
     async with httpx.AsyncClient(timeout=10) as client:
@@ -470,6 +638,12 @@ async def health_deep():
                     "status": "error",
                 }
                 results["status"] = "degraded"
+
+    # Circuit breakers — any OPEN means degraded
+    breakers = get_all_circuit_breakers()
+    results["checks"]["circuit_breakers"] = breakers if breakers else {}
+    if any(b.get("state") == "open" for b in breakers.values()):
+        results["status"] = "degraded"
 
     # Override: if deepseek is down, it's degraded (even if RPCs are fine)
     _health_deep_cache = dict(results)
@@ -582,10 +756,29 @@ async def health_metrics():
 
     # Per-tool breakdown
     by_tool = stats.get("by_tool", {})
-    lines.append(f"# HELP api_calls_by_tool Calls per tool (24h)")
-    lines.append(f"# TYPE api_calls_by_tool gauge")
+    lines.append("# HELP api_calls_by_tool Calls per tool (24h)")
+    lines.append("# TYPE api_calls_by_tool gauge")
     for tool, count in by_tool.items():
         lines.append(f'api_calls_by_tool{{tool="{tool}"}} {count}')
+
+    # Revenue metrics from credits
+    credit_stats = credits.get_stats()
+    lines.append("# HELP api_credit_revenue_usd_total Lifetime revenue from API key credits")
+    lines.append("# TYPE api_credit_revenue_usd_total counter")
+    lines.append(f"api_credit_revenue_usd_total {credit_stats.get('total_revenue_usd', 0)}")
+    lines.append("# HELP api_total_keys Total API keys created")
+    lines.append("# TYPE api_total_keys gauge")
+    lines.append(f"api_total_keys {credit_stats.get('total_keys', 0)}")
+
+    # LLM Budget tracking
+    from app.services.cost_tracker import get_budget_status
+    budget = get_budget_status()
+    lines.append("# HELP api_llm_budget_spent_usd LLM budget spent (lifetime)")
+    lines.append("# TYPE api_llm_budget_spent_usd counter")
+    lines.append(f"api_llm_budget_spent_usd {budget.get('total_spent_usd', 0)}")
+    lines.append("# HELP api_llm_budget_limit_usd LLM budget limit")
+    lines.append("# TYPE api_llm_budget_limit_usd gauge")
+    lines.append(f"api_llm_budget_limit_usd {budget.get('limit_usd', 0)}")
 
     lines.append("")
     return JSONResponse(content="\n".join(lines), media_type="text/plain; charset=utf-8")
