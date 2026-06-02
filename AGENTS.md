@@ -30,7 +30,7 @@ Protocol: MCP (Model Context Protocol)
 3. Call tool again with `payment_tx=<tx-hash>`
 4. Server verifies on-chain, executes tool, returns result
 
-## Available Tools (29)
+## Available Tools (30)
 
 ### AI Services (upto pricing — pay per token usage)
 - **audit** ($0.01-$0.05) — Security scan with OWASP Top 10 + SWC Registry
@@ -53,6 +53,7 @@ Protocol: MCP (Model Context Protocol)
 - **agent-audit** ($0.25-$0.50) — Full AI agent security audit — code, behavior, trust score
 - **contract-verify** ($0.50-$1.00) — Smart contract formal verification — 36 SWC + DeFi exploits
 - **security-score** ($0.05-$0.10) — Rapid security assessment — quick score and risk level
+- **amm-security-check** ($0.02-$0.05) — AMM pool security — sandwich attacks, impermanent loss, TVL risks
 
 ### Data & DevOps
 - **data-feed** ($0.01-$0.02) — Structured data feed on any topic — machine-readable JSON
@@ -85,7 +86,7 @@ Protocol: MCP (Model Context Protocol)
 
 ## Discovery Endpoints
 
-- `/.well-known/x402` — Full manifest with all 24 services and prices
+- `/.well-known/x402` — Full manifest with all 25 services and prices
 - `/.well-known/openapi.json` — OpenAPI 3.1 spec with x402 extensions
 - `/.well-known/mcp/server-card.json` — Smithery server card
 - `/.well-known/glama.json` — Glama auto-discovery

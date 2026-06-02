@@ -1,0 +1,121 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0a0a1a;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#0d1525;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#0a0f1a;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#3b82f6;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#8b5cf6;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="textGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#60a5fa;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#a78bfa;stop-opacity:1" />
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="blur" />
+      <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="1280" height="640" fill="url(#bg)" />
+
+  <!-- Grid pattern -->
+  <g opacity="0.03" stroke="#fff" stroke-width="1">
+    <line x1="0" y1="160" x2="1280" y2="160" />
+    <line x1="0" y1="320" x2="1280" y2="320" />
+    <line x1="0" y1="480" x2="1280" y2="480" />
+    <line x1="320" y1="0" x2="320" y2="640" />
+    <line x1="640" y1="0" x2="640" y2="640" />
+    <line x1="960" y1="0" x2="960" y2="640" />
+  </g>
+
+  <!-- Accent line -->
+  <rect x="0" y="0" width="1280" height="4" fill="url(#accent)" />
+
+  <!-- Left decorative circle -->
+  <circle cx="100" cy="540" r="200" fill="#3b82f6" opacity="0.03" />
+  <circle cx="100" cy="540" r="120" fill="#3b82f6" opacity="0.05" />
+
+  <!-- Right decorative circle -->
+  <circle cx="1180" cy="100" r="180" fill="#8b5cf6" opacity="0.03" />
+
+  <!-- Main content area -->
+  <g transform="translate(80, 120)">
+    <!-- Icon: AI chip + dollar sign concept -->
+    <g transform="translate(0, 0)" filter="url(#glow)">
+      <!-- Chip body -->
+      <rect x="0" y="0" width="80" height="80" rx="12" fill="none" stroke="url(#accent)" stroke-width="2.5" />
+      <!-- Inner square -->
+      <rect x="20" y="20" width="40" height="40" rx="6" fill="url(#accent)" opacity="0.15" />
+      <!-- Dollar sign -->
+      <text x="40" y="48" font-family="Arial, sans-serif" font-size="32" font-weight="bold" fill="url(#accent)" text-anchor="middle">$</text>
+      <!-- Pins left -->
+      <rect x="-12" y="14" width="12" height="6" rx="2" fill="url(#accent)" opacity="0.6" />
+      <rect x="-12" y="26" width="12" height="6" rx="2" fill="url(#accent)" opacity="0.6" />
+      <rect x="-12" y="38" width="12" height="6" rx="2" fill="url(#accent)" opacity="0.6" />
+      <rect x="-12" y="50" width="12" height="6" rx="2" fill="url(#accent)" opacity="0.6" />
+      <rect x="-12" y="62" width="12" height="6" rx="2" fill="url(#accent)" opacity="0.6" />
+      <!-- Pins right -->
+      <rect x="80" y="14" width="12" height="6" rx="2" fill="url(#accent)" opacity="0.6" />
+      <rect x="80" y="26" width="12" height="6" rx="2" fill="url(#accent)" opacity="0.6" />
+      <rect x="80" y="38" width="12" height="6" rx="2" fill="url(#accent)" opacity="0.6" />
+      <rect x="80" y="50" width="12" height="6" rx="2" fill="url(#accent)" opacity="0.6" />
+      <rect x="80" y="62" width="12" height="6" rx="2" fill="url(#accent)" opacity="0.6" />
+    </g>
+
+    <!-- Title -->
+    <text x="110" y="45" font-family="'Segoe UI', Arial, sans-serif" font-size="48" font-weight="bold" fill="#f1f5f9">AI Agent API</text>
+
+    <!-- Subtitle -->
+    <text x="110" y="80" font-family="'Segoe UI', Arial, sans-serif" font-size="22" fill="url(#textGrad)">25 REST + 30 MCP AI services via USDC micropayments</text>
+  </g>
+
+  <!-- Feature pills -->
+  <g transform="translate(80, 280)">
+    <!-- Pill 1 -->
+    <rect x="0" y="0" width="200" height="40" rx="20" fill="#3b82f6" opacity="0.1" stroke="#3b82f6" stroke-width="1" stroke-opacity="0.3" />
+    <text x="100" y="26" font-family="Arial, sans-serif" font-size="16" fill="#93c5fd" text-anchor="middle">🔐 x402 Payments</text>
+
+    <!-- Pill 2 -->
+    <rect x="220" y="0" width="180" height="40" rx="20" fill="#8b5cf6" opacity="0.1" stroke="#8b5cf6" stroke-width="1" stroke-opacity="0.3" />
+    <text x="310" y="26" font-family="Arial, sans-serif" font-size="16" fill="#c4b5fd" text-anchor="middle">🧠 DeepSeek V4</text>
+
+    <!-- Pill 3 -->
+    <rect x="420" y="0" width="170" height="40" rx="20" fill="#10b981" opacity="0.1" stroke="#10b981" stroke-width="1" stroke-opacity="0.3" />
+    <text x="505" y="26" font-family="Arial, sans-serif" font-size="16" fill="#6ee7b7" text-anchor="middle">⚡ 1M Context</text>
+
+    <!-- Pill 4 -->
+    <rect x="610" y="0" width="200" height="40" rx="20" fill="#f59e0b" opacity="0.1" stroke="#f59e0b" stroke-width="1" stroke-opacity="0.3" />
+    <text x="710" y="26" font-family="Arial, sans-serif" font-size="16" fill="#fcd34d" text-anchor="middle">🔗 MCP Protocol</text>
+
+    <!-- Pill 5 -->
+    <rect x="830" y="0" width="180" height="40" rx="20" fill="#ec4899" opacity="0.1" stroke="#ec4899" stroke-width="1" stroke-opacity="0.3" />
+    <text x="920" y="26" font-family="Arial, sans-serif" font-size="16" fill="#f9a8d4" text-anchor="middle">💰 Pay-per-use</text>
+  </g>
+
+  <!-- Code snippet -->
+  <g transform="translate(80, 370)">
+    <rect x="0" y="0" width="1120" height="150" rx="12" fill="#0f172a" stroke="#1e293b" stroke-width="1.5" />
+    <!-- Terminal dots -->
+    <circle cx="20" cy="20" r="6" fill="#ef4444" opacity="0.8" />
+    <circle cx="40" cy="20" r="6" fill="#f59e0b" opacity="0.8" />
+    <circle cx="60" cy="20" r="6" fill="#10b981" opacity="0.8" />
+
+    <!-- Code text -->
+    <text x="20" y="55" font-family="'Cascadia Code', 'Fira Code', 'Courier New', monospace" font-size="17" fill="#e2e8f0">
+      <tspan x="20" dy="0" fill="#64748b"># No API key, no subscription — just USDC</tspan>
+      <tspan x="20" dy="28" fill="#60a5fa">curl</tspan><tspan dy="0" fill="#e2e8f0"> -X POST https://agent-api-ai.duckdns.org/api/</tspan><tspan dy="0" fill="#f59e0b">audit</tspan><tspan dy="0" fill="#e2e8f0"> \</tspan>
+      <tspan x="20" dy="28" fill="#e2e8f0">  -d </tspan><tspan dy="0" fill="#6ee7b7">'{"code":"contract Token { ... }"}'</tspan>
+      <tspan x="20" dy="28" fill="#64748b"># → 402 Payment Required — sends back wallet + amount</tspan>
+    </text>
+  </g>
+
+  <!-- Footer -->
+  <g transform="translate(80, 570)">
+    <text x="0" y="0" font-family="'Segoe UI', Arial, sans-serif" font-size="18" fill="#64748b">github.com/AntoNYak0/ai-agent-api</text>
+    <text x="1120" y="0" font-family="'Segoe UI', Arial, sans-serif" font-size="18" fill="#64748b" text-anchor="end">agent-api-ai.duckdns.org</text>
+  </g>
+</svg>
