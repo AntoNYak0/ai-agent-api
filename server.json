@@ -1,0 +1,92 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.antoNYak0/ai-agent-api",
+  "title": "AI Agent API",
+  "description": "30 pay-per-call AI services via x402 USDC — code audit, DeFi, AMM security, micro-tasks, composite workflows",
+  "version": "2.0.0",
+  "websiteUrl": "https://agent-api-ai.duckdns.org",
+  "repository": {
+    "url": "https://github.com/AntoNYak0/ai-agent-api",
+    "source": "github",
+    "id": "AntoNYak0/ai-agent-api"
+  },
+  "icons": [
+    {
+      "src": "https://agent-api-ai.duckdns.org/favicon.ico",
+      "sizes": "any",
+      "mimeType": "image/x-icon"
+    }
+  ],
+  "remotes": [
+    {
+      "type": "sse",
+      "url": "https://agent-api-ai.duckdns.org/mcp/sse"
+    }
+  ],
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "agent-api",
+      "transport": {
+        "type": "sse",
+        "url": "https://agent-api-ai.duckdns.org/mcp/sse"
+      }
+    }
+  ],
+  "_meta": {
+    "io.modelcontextprotocol.registry/publisher-provided": {
+      "io.github.antoNYak0": {
+        "agent-api": {
+          "tier": "Community",
+          "status": "Active",
+          "tags": [
+            "ai",
+            "code-audit",
+            "solidity",
+            "defi",
+            "sql",
+            "microtasks",
+            "x402",
+            "usdc",
+            "security",
+            "devtools",
+            "data",
+            "composite-workflows"
+          ],
+          "tools": [
+            "audit",
+            "refactor",
+            "docs",
+            "defi",
+            "trading",
+            "solidity-scan",
+            "nl-to-sql",
+            "sql-to-nl",
+            "git-summarize",
+            "translate-code",
+            "whale-tracker",
+            "smart-money",
+            "price-feed",
+            "agent-audit",
+            "contract-verify",
+            "security-score",
+            "data-feed",
+            "debug-log",
+            "amm-security-check",
+            "validate-json",
+            "classify-text",
+            "extract-data",
+            "generate-regex",
+            "format-data",
+            "summarize",
+            "defi-research",
+            "code-health-check",
+            "smart-contract-audit",
+            "data-pipeline",
+            "run-workflow"
+          ]
+        }
+      }
+    }
+  }
+}

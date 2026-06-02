@@ -1,16 +1,21 @@
 # Smithery.ai server configuration
 # Auto-discovered by Smithery when this repo is connected
 # https://smithery.ai/docs/build/publish
+#
+# Connected to: https://github.com/AntoNYak0/ai-agent-api
+# Server URL: https://agent-api-ai.duckdns.org
+# MCP SSE: https://agent-api-ai.duckdns.org/mcp/sse
 
 name: ai-agent-api
 version: "2.0.0"
 description: >
-  29 pay-per-call AI services via x402 USDC micropayments.
+  30 pay-per-call AI services via x402 USDC micropayments.
   Code audit, refactoring, DeFi analysis, Solidity scanner,
-  SQL/NL tools, whale tracking, smart money, agent audit,
+  AMM security, SQL/NL tools, whale tracking, smart money, agent audit,
   contract verification, micro-tasks, and composite workflows.
   Powered by DeepSeek V4 Pro (1M context).
-  No API key needed — agents pay per call in USDC.
+  Dual payment: x402 USDC (for AI agents) + API keys with 50 free credits (for humans).
+  Auto-top-up via blockchain listener — send USDC, get credits in 60s.
 
 transport:
   type: sse
@@ -20,10 +25,15 @@ authentication:
   required: false
   schemes:
     - x402
+    - bearer
   description: >
-    No API key. Pay per call in USDC via x402 on Base, Arbitrum, or Optimism.
-    Send USDC to 0xdE7eb04faE758055642f67f30D246CcB7136C95E,
-    then pass payment_tx=<hash> with each tool call.
+    Two options:
+    1. x402: Pay per call in USDC on Base/Arbitrum/Optimism/BNB Chain.
+       Send USDC to 0xdE7eb04faE758055642f67f30D246CcB7136C95E,
+       then pass payment_tx=<hash> with each tool call.
+    2. API Key: Get 50 free credits at POST /billing/create-key.
+       Pass as Authorization: Bearer <key> header.
+       Top up with crypto — auto-credited within 60s.
 
 tools:
   # AI Services (upto pricing)
@@ -101,6 +111,10 @@ tools:
   - name: debug-log
     description: CI/CD error log analysis — root cause and fix suggestions
     pricing: $0.01-$0.03 USDC
+
+  - name: amm-security-check
+    description: AMM pool security analysis — sandwich attacks, impermanent loss, TVL risks
+    pricing: $0.02-$0.05 USDC
 
   # Micro-tasks (exact pricing)
   - name: validate-json

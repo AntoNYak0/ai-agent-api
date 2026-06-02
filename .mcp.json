@@ -1,0 +1,14 @@
+{
+  "$schema": "https://open-plugins.org/schemas/mcp.json",
+  "mcpServers": {
+    "agentic-market": {
+      "type": "sse",
+      "url": "https://agent-api-ai.duckdns.org/mcp/sse",
+      "description": "30 AI-powered tools for DeFi security, smart contract audit, code refactoring, and market research — pay-per-use via x402 (USDC) or API key credits. Powered by DeepSeek V4 Pro.",
+      "authentication": {
+        "type": "x402",
+        "description": "USDC micropayments on Base, Arbitrum, Optimism, BNB Chain. API key credits also available."
+      }
+    }
+  }
+}
